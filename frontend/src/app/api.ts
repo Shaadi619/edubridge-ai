@@ -23,6 +23,26 @@ async function request<T>(path: string, init?: RequestInit): Promise<T> {
   return response.json() as Promise<T>;
 }
 
+async function upload<T>(path: string, formData: FormData): Promise<T> {
+  const response = await fetch(`${API_BASE_URL}${path}`, {
+    method: "POST",
+    body: formData,
+  });
+
+  if (!response.ok) {
+    let message = `Request failed with status ${response.status}`;
+    try {
+      const body = await response.json();
+      message = body.detail ?? message;
+    } catch {
+      // Keep the generic message when the response is not JSON.
+    }
+    throw new Error(message);
+  }
+
+  return response.json() as Promise<T>;
+}
+
 export type EnrollmentStatus = "pending" | "approved" | "rejected";
 
 export type ApiTeacher = {
@@ -81,6 +101,17 @@ export type ApiTutorAnswer = {
   follow_up_question: string | null;
 };
 
+export type ApiMaterial = {
+  id: number;
+  course_id: number;
+  filename: string;
+  content_type: string;
+  storage_path: string;
+  status: string;
+  extracted_text_preview: string;
+  uploaded_at: string;
+};
+
 export const api = {
   listTeachers: () => request<ApiTeacher[]>("/accounts/teachers"),
   createTeacher: (payload: { full_name: string; email: string; course_specializations: string[] }) =>
@@ -123,4 +154,12 @@ export const api = {
       method: "POST",
       body: JSON.stringify(payload),
     }),
+
+  listMaterials: (courseId: number) =>
+    request<ApiMaterial[]>(`/materials/courses/${courseId}`),
+  uploadMaterial: (courseId: number, file: File) => {
+    const formData = new FormData();
+    formData.append("file", file);
+    return upload<ApiMaterial>(`/materials/courses/${courseId}`, formData);
+  },
 };

@@ -17,7 +17,7 @@ import {
   ResponsiveContainer, AreaChart, Area, RadarChart,
   PolarGrid, PolarAngleAxis, Radar,
 } from "recharts";
-import { api, type ApiCourse, type ApiEnrollmentRequest, type ApiStudent, type ApiTeacher } from "./api";
+import { api, type ApiCourse, type ApiEnrollmentRequest, type ApiMaterial, type ApiStudent, type ApiTeacher } from "./api";
 
 // ─── Types ────────────────────────────────────────────────────────────────
 
@@ -382,44 +382,75 @@ function toEnrollRequest(request: ApiEnrollmentRequest): EnrollRequest {
   };
 }
 
+function fileTypeFromName(name: string) {
+  const match = name.match(/\.([a-z0-9]+)$/i);
+  return match?.[1]?.toLowerCase() ?? "file";
+}
+
+function formatBytes(bytes: number) {
+  if (bytes >= 1024 * 1024) return `${(bytes / 1024 / 1024).toFixed(1)} MB`;
+  if (bytes >= 1024) return `${Math.round(bytes / 1024)} KB`;
+  return `${bytes} B`;
+}
+
+function toUploadedDoc(material: ApiMaterial, fileSize?: number): UploadedDoc {
+  return {
+    id: material.id,
+    name: material.filename,
+    size: fileSize != null ? formatBytes(fileSize) : "Stored",
+    type: fileTypeFromName(material.filename),
+    status: material.status === "error" ? "error" : "ready",
+    progress: 100,
+    uploadedAt: formatRelativeDate(material.uploaded_at),
+  };
+}
+
 // ─── Upload Modal ─────────────────────────────────────────────────────────
 
-function UploadModal({ onClose, onUploaded }: {
+function UploadModal({ onClose, onUploaded, courseName }: {
   onClose: () => void;
-  onUploaded: (doc: UploadedDoc) => void;
+  onUploaded: (file: File) => Promise<UploadedDoc>;
+  courseName: string;
 }) {
   const [dragging, setDragging] = useState(false);
   const [uploading, setUploading] = useState<{ name: string; progress: number } | null>(null);
   const inputRef = useRef<HTMLInputElement>(null);
 
-  const simulateUpload = useCallback((name: string, size: string) => {
-    const newDoc: UploadedDoc = {
-      id: Date.now(), name, size, type: "pdf",
-      status: "uploading", progress: 0, uploadedAt: "Just now",
-    };
-    onUploaded(newDoc);
-    setUploading({ name, progress: 0 });
+  const uploadFile = useCallback(async (file: File) => {
+    setUploading({ name: file.name, progress: 0 });
     let p = 0;
     const interval = setInterval(() => {
       p += Math.random() * 18 + 8;
-      if (p >= 100) {
-        clearInterval(interval);
+      setUploading({ name: file.name, progress: Math.min(p, 90) });
+    }, 180);
+    try {
+      const doc = await onUploaded(file);
+      clearInterval(interval);
+      setUploading({ name: file.name, progress: 100 });
+      setTimeout(() => {
         setUploading(null);
         onClose();
-        toast.success(`"${name}" uploaded and queued for processing`);
-        return;
-      }
-      setUploading({ name, progress: Math.min(p, 100) });
-    }, 180);
+        toast.success(`"${doc.name}" uploaded and stored`);
+      }, 250);
+    } catch (error) {
+      clearInterval(interval);
+      setUploading(null);
+      toast.error(error instanceof Error ? error.message : "Upload failed");
+    }
   }, [onClose, onUploaded]);
 
   const handleFiles = (files: FileList | null) => {
     if (!files?.length) return;
-    const f = files[0];
-    const size = f.size > 1024 * 1024
-      ? `${(f.size / 1024 / 1024).toFixed(1)} MB`
-      : `${Math.round(f.size / 1024)} KB`;
-    simulateUpload(f.name, size);
+    uploadFile(files[0]);
+  };
+
+  const uploadSampleFile = (name: string) => {
+    const file = new File(
+      [`Sample EduBridge material: ${name}\n\nThis placeholder file is stored by the backend and will be parsed in the document-processing phase.`],
+      name,
+      { type: "application/pdf" },
+    );
+    uploadFile(file);
   };
 
   return (
@@ -435,7 +466,7 @@ function UploadModal({ onClose, onUploaded }: {
         <div className="flex items-center justify-between mb-6">
           <div>
             <h2 className="font-semibold text-foreground text-lg">Upload Course Material</h2>
-            <p className="text-sm text-muted-foreground font-light mt-0.5">Biology 101 · PDF, DOCX, PPTX up to 50 MB</p>
+            <p className="text-sm text-muted-foreground font-light mt-0.5">{courseName} · PDF, DOCX, PPTX up to 50 MB</p>
           </div>
           <button onClick={onClose} className="p-2 hover:bg-muted rounded-lg transition-colors text-muted-foreground">
             <X size={16} />
@@ -490,7 +521,7 @@ function UploadModal({ onClose, onUploaded }: {
               <div className="space-y-1">
                 {SAMPLE_FILES.map(name => (
                   <button key={name}
-                    onClick={() => simulateUpload(name, `${(Math.random() * 4 + 0.8).toFixed(1)} MB`)}
+                    onClick={() => uploadSampleFile(name)}
                     className="w-full flex items-center gap-3 px-3 py-2.5 rounded-lg hover:bg-muted transition-colors text-left group"
                   >
                     <div className="w-7 h-7 rounded-lg bg-red-50 flex items-center justify-center shrink-0">
@@ -511,11 +542,13 @@ function UploadModal({ onClose, onUploaded }: {
 
 // ─── Teacher Materials ────────────────────────────────────────────────────
 
-function TeacherMaterials({ docs, setDocs, onUploadClick, onViewDoc }: {
+function TeacherMaterials({ docs, setDocs, onUploadClick, onViewDoc, courseName, isLoading }: {
   docs: UploadedDoc[];
   setDocs: React.Dispatch<React.SetStateAction<UploadedDoc[]>>;
   onViewDoc: (doc: UploadedDoc) => void;
   onUploadClick: () => void;
+  courseName: string;
+  isLoading: boolean;
 }) {
   useEffect(() => {
     const uploading = docs.filter(d => d.status === "uploading" || d.status === "processing");
@@ -562,7 +595,7 @@ function TeacherMaterials({ docs, setDocs, onUploadClick, onViewDoc }: {
       <div className="mb-6 flex items-start justify-between flex-wrap gap-4">
         <div>
           <h1 className="font-display text-2xl text-primary">Course Materials</h1>
-          <p className="text-sm text-muted-foreground mt-1 font-light">Biology 101 — documents indexed for AI Q&A</p>
+          <p className="text-sm text-muted-foreground mt-1 font-light">{courseName} — documents stored for AI indexing</p>
         </div>
         <motion.button whileHover={{ scale: 1.02 }} whileTap={{ scale: 0.97 }}
           onClick={onUploadClick}
@@ -571,6 +604,13 @@ function TeacherMaterials({ docs, setDocs, onUploadClick, onViewDoc }: {
           <Upload size={15} />Upload Document
         </motion.button>
       </div>
+
+      {isLoading && (
+        <div className="mb-5 bg-card border border-border rounded-xl p-4 shadow-sm flex items-center gap-3 text-sm text-muted-foreground">
+          <RefreshCw size={15} className="animate-spin text-primary" />
+          Loading materials from the backend...
+        </div>
+      )}
 
       <div className="grid grid-cols-3 gap-4 mb-8">
         {[
@@ -644,7 +684,7 @@ function TeacherMaterials({ docs, setDocs, onUploadClick, onViewDoc }: {
         <div className="px-5 py-4 bg-muted/30 border-t border-border">
           <p className="text-xs text-muted-foreground font-light leading-relaxed">
             <span className="font-medium text-foreground">How indexing works: </span>
-            Uploaded files are OCR-processed and chunked into retrievable segments. Students can only ask questions answerable from these documents.
+            Uploaded files are now stored by the backend. The next phase will OCR/process them, chunk extracted text, and make them retrievable for cited AI answers.
           </p>
         </div>
       </div>
@@ -1832,12 +1872,13 @@ function TeacherDashboard({ teacher, onLogout, onSwitch, darkMode, setDarkMode }
   const [searchQuery, setSearchQuery] = useState("");
   const [teacherCourses, setTeacherCourses] = useState(TEACHER_COURSES.map((course, index) => ({ ...course, backendId: index + 1, description: "" })));
   const [selectedCourse, setSelectedCourse] = useState(teacherCourses[0]);
-  const [docs, setDocs] = useState<UploadedDoc[]>(INITIAL_DOCS);
+  const [docs, setDocs] = useState<UploadedDoc[]>([]);
   const [requests, setRequests] = useState<EnrollRequest[]>([]);
   const [notifications, setNotifications] = useState<Notification[]>(INITIAL_NOTIFICATIONS);
   const [announcements, setAnnouncements] = useState<Announcement[]>(INITIAL_ANNOUNCEMENTS);
   const [viewingDoc, setViewingDoc] = useState<UploadedDoc | null>(null);
   const [isWorkspaceLoading, setIsWorkspaceLoading] = useState(false);
+  const [isMaterialsLoading, setIsMaterialsLoading] = useState(false);
 
   const loadWorkspace = useCallback(async () => {
     if (!teacher) {
@@ -1861,6 +1902,34 @@ function TeacherDashboard({ teacher, onLogout, onSwitch, darkMode, setDarkMode }
   useEffect(() => {
     loadWorkspace();
   }, [loadWorkspace]);
+
+  const loadMaterials = useCallback(async () => {
+    if (!selectedCourse?.backendId) {
+      setDocs(INITIAL_DOCS);
+      return;
+    }
+    setIsMaterialsLoading(true);
+    try {
+      const materials = await api.listMaterials(selectedCourse.backendId);
+      setDocs(materials.map(material => toUploadedDoc(material)));
+    } catch (error) {
+      toast.error(error instanceof Error ? error.message : "Could not load course materials");
+    } finally {
+      setIsMaterialsLoading(false);
+    }
+  }, [selectedCourse?.backendId]);
+
+  useEffect(() => {
+    loadMaterials();
+  }, [loadMaterials]);
+
+  const uploadMaterial = async (file: File) => {
+    if (!selectedCourse?.backendId) throw new Error("Select a backend course before uploading");
+    const material = await api.uploadMaterial(selectedCourse.backendId, file);
+    const doc = toUploadedDoc(material, file.size);
+    setDocs(prev => [doc, ...prev.filter(item => item.id !== doc.id)]);
+    return doc;
+  };
 
   const resolveEnrollment = async (id: number, action: "approved" | "denied") => {
     const updated = await api.decideEnrollment(id, action === "approved" ? "approved" : "rejected");
@@ -1963,7 +2032,14 @@ function TeacherDashboard({ teacher, onLogout, onSwitch, darkMode, setDarkMode }
               {tab === "students" && <TeacherStudents searchQuery={searchQuery} />}
               {tab === "analytics" && <TeacherAnalytics course={selectedCourse} />}
               {tab === "materials" && (
-                <TeacherMaterials docs={docs} setDocs={setDocs} onUploadClick={() => setUploadOpen(true)} onViewDoc={setViewingDoc} />
+                <TeacherMaterials
+                  docs={docs}
+                  setDocs={setDocs}
+                  onUploadClick={() => setUploadOpen(true)}
+                  onViewDoc={setViewingDoc}
+                  courseName={selectedCourse?.name ?? "Selected course"}
+                  isLoading={isMaterialsLoading}
+                />
               )}
               {tab === "settings" && <TeacherSettings darkMode={darkMode} setDarkMode={setDarkMode} />}
             </motion.div>
@@ -1974,7 +2050,8 @@ function TeacherDashboard({ teacher, onLogout, onSwitch, darkMode, setDarkMode }
         {uploadOpen && (
           <UploadModal
             onClose={() => setUploadOpen(false)}
-            onUploaded={doc => setDocs(prev => [doc, ...prev])}
+            onUploaded={uploadMaterial}
+            courseName={selectedCourse?.name ?? "Selected course"}
           />
         )}
         {courseCreateOpen && (

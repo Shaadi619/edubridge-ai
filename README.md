@@ -82,10 +82,11 @@ Implemented:
 - Typed frontend API client
 - Frontend account creation/login connected to backend demo accounts
 - Teacher workspace, course creation, enrollment decisions, student join, and tutor ask connected to backend endpoints
+- Teacher materials list and upload UI connected to backend storage
 
 Next:
 
-- Replace remaining static dashboard analytics and materials data with API state
+- Replace remaining static dashboard analytics with API state
 - Add proper authentication
 - Add document text extraction
 - Add RAG retrieval and source-grounded AI answers
