@@ -61,6 +61,16 @@ class Material(SQLModel, table=True):
     uploaded_at: datetime = Field(default_factory=lambda: datetime.now(UTC))
 
 
+class MaterialChunk(SQLModel, table=True):
+    id: int | None = Field(default=None, primary_key=True)
+    material_id: int = Field(foreign_key="material.id", index=True)
+    course_id: int = Field(foreign_key="course.id", index=True)
+    chunk_index: int
+    text: str
+    source_page: int | None = None
+    created_at: datetime = Field(default_factory=lambda: datetime.now(UTC))
+
+
 class Misconception(SQLModel, table=True):
     id: int | None = Field(default=None, primary_key=True)
     student_id: int = Field(foreign_key="student.id", index=True)

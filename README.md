@@ -83,12 +83,14 @@ Implemented:
 - Frontend account creation/login connected to backend demo accounts
 - Teacher workspace, course creation, enrollment decisions, student join, and tutor ask connected to backend endpoints
 - Teacher materials list and upload UI connected to backend storage
+- PDF/text extraction for uploaded materials
+- Material chunks stored in SQLite for the future RAG retrieval layer
 
 Next:
 
 - Replace remaining static dashboard analytics with API state
 - Add proper authentication
-- Add document text extraction
+- Add vector embeddings and semantic retrieval for extracted chunks
 - Add RAG retrieval and source-grounded AI answers
 - Add real misconception detection
 - Add adaptive quizzes and richer analytics

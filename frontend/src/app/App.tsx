@@ -70,6 +70,7 @@ type UploadedDoc = {
   progress: number;
   pages?: number;
   uploadedAt: string;
+  preview?: string;
 };
 
 type EnrollRequest = {
@@ -394,14 +395,20 @@ function formatBytes(bytes: number) {
 }
 
 function toUploadedDoc(material: ApiMaterial, fileSize?: number): UploadedDoc {
+  const status = material.status === "error"
+    ? "error"
+    : material.status === "processing"
+      ? "processing"
+      : "ready";
   return {
     id: material.id,
     name: material.filename,
     size: fileSize != null ? formatBytes(fileSize) : "Stored",
     type: fileTypeFromName(material.filename),
-    status: material.status === "error" ? "error" : "ready",
+    status,
     progress: 100,
     uploadedAt: formatRelativeDate(material.uploaded_at),
+    preview: material.extracted_text_preview,
   };
 }
 
@@ -3222,7 +3229,7 @@ const GENERIC_PAGES = [
 
 function DocViewerModal({ doc, onClose }: { doc: UploadedDoc; onClose: () => void }) {
   const [page, setPage] = useState(0);
-  const content = DOC_MOCK_CONTENT[doc.name] ?? GENERIC_PAGES;
+  const content = doc.preview ? [doc.preview] : DOC_MOCK_CONTENT[doc.name] ?? GENERIC_PAGES;
   const totalPages = doc.pages ?? content.length;
   const currentContent = content[page % content.length];
   const isHeading = !currentContent.includes("\n") && currentContent.length < 50;

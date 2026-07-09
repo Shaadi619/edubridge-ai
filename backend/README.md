@@ -40,6 +40,7 @@ python -m app.seed
 - `PATCH /courses/enrollment-requests/{request_id}`
 - `GET /materials/courses/{course_id}`
 - `POST /materials/courses/{course_id}`
+- `GET /materials/{material_id}/chunks`
 - `POST /tutor/ask`
 - `POST /tutor/misconceptions/check`
 - `GET /analytics/courses/{course_id}`
@@ -49,5 +50,7 @@ python -m app.seed
 
 The current database is SQLite and is created automatically at `backend/data/edubridge.db`.
 Uploaded files are stored under `backend/storage/uploads`.
+
+Uploaded PDFs are parsed with `pypdf` and split into text chunks for the future retrieval layer. Plain text files are also supported for lightweight testing. DOCX, PPTX, scanned PDFs, and OCR are planned future additions.
 
 The tutor and misconception endpoints are intentionally structured placeholders. Their response contracts are stable so the frontend can integrate early, while the internal logic can later be upgraded to a RAG pipeline and local/open-source LLM.

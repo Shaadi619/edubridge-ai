@@ -1,10 +1,11 @@
 from pathlib import Path
 
-from fastapi import APIRouter, Depends, File, UploadFile, status
+from fastapi import APIRouter, Depends, File, HTTPException, UploadFile, status
 from sqlmodel import Session, select
 
 from app.database import BASE_DIR, get_session
-from app.models import Material
+from app.document_processing import extract_material
+from app.models import Material, MaterialChunk
 from app.services import require_course
 
 router = APIRouter(prefix="/materials", tags=["materials"])
@@ -21,6 +22,21 @@ def list_course_materials(
     require_course(session, course_id)
     return session.exec(
         select(Material).where(Material.course_id == course_id).order_by(Material.uploaded_at.desc())
+    ).all()
+
+
+@router.get("/{material_id}/chunks", response_model=list[MaterialChunk])
+def list_material_chunks(
+    material_id: int,
+    session: Session = Depends(get_session),
+) -> list[MaterialChunk]:
+    material = session.get(Material, material_id)
+    if not material:
+        raise HTTPException(status.HTTP_404_NOT_FOUND, "Material not found")
+    return session.exec(
+        select(MaterialChunk)
+        .where(MaterialChunk.material_id == material_id)
+        .order_by(MaterialChunk.chunk_index)
     ).all()
 
 
@@ -43,10 +59,38 @@ def upload_course_material(
         filename=safe_name,
         content_type=file.content_type or "application/octet-stream",
         storage_path=str(storage_path),
-        status="uploaded",
-        extracted_text_preview="Text extraction will be added in the document-processing phase.",
+        status="processing",
+        extracted_text_preview="Extracting text for future AI retrieval.",
     )
     session.add(material)
     session.commit()
     session.refresh(material)
+
+    try:
+        extraction = extract_material(storage_path, material.content_type)
+        material.status = extraction.status
+        material.extracted_text_preview = extraction.preview
+        session.add(material)
+        session.commit()
+        session.refresh(material)
+
+        for index, chunk in enumerate(extraction.chunks):
+            session.add(
+                MaterialChunk(
+                    material_id=material.id or 0,
+                    course_id=course_id,
+                    chunk_index=index,
+                    text=chunk.text,
+                    source_page=chunk.source_page,
+                )
+            )
+        session.commit()
+        session.refresh(material)
+    except Exception as exc:
+        material.status = "error"
+        material.extracted_text_preview = f"Text extraction failed: {exc}"
+        session.add(material)
+        session.commit()
+        session.refresh(material)
+
     return material
