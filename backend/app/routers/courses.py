@@ -48,6 +48,14 @@ def create_course(payload: CourseCreate, session: Session = Depends(get_session)
     return course_to_read(session, course)
 
 
+@router.get("/by-code/{class_code}", response_model=CourseRead)
+def get_course_by_code(class_code: str, session: Session = Depends(get_session)) -> CourseRead:
+    course = session.exec(select(Course).where(Course.class_code == class_code.upper())).first()
+    if not course:
+        raise HTTPException(status.HTTP_404_NOT_FOUND, "Class code not found")
+    return course_to_read(session, course)
+
+
 @router.get("/{course_id}", response_model=CourseRead)
 def get_course(course_id: int, session: Session = Depends(get_session)) -> CourseRead:
     return course_to_read(session, require_course(session, course_id))

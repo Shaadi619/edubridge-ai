@@ -17,12 +17,18 @@ import {
   ResponsiveContainer, AreaChart, Area, RadarChart,
   PolarGrid, PolarAngleAxis, Radar,
 } from "recharts";
+import { api, type ApiCourse, type ApiEnrollmentRequest, type ApiStudent, type ApiTeacher } from "./api";
 
 // ─── Types ────────────────────────────────────────────────────────────────
 
 type View = "landing" | "auth" | "teacher" | "student";
 type TeacherTab = "overview" | "students" | "analytics" | "materials" | "settings";
 type StudentTab = "workspace" | "quiz" | "progress" | "enroll" | "settings";
+
+type DemoSession = {
+  teacher: ApiTeacher | null;
+  student: ApiStudent | null;
+};
 
 type Announcement = {
   id: number;
@@ -314,6 +320,68 @@ function ChartTooltip({ active, payload, label }: any) {
   );
 }
 
+function initialsFromName(name: string) {
+  return name
+    .split(/\s+/)
+    .filter(Boolean)
+    .slice(0, 2)
+    .map(part => part[0]?.toUpperCase())
+    .join("") || "EB";
+}
+
+function formatRelativeDate(value: string) {
+  const date = new Date(value);
+  if (Number.isNaN(date.getTime())) return "Just now";
+  const diffMs = Date.now() - date.getTime();
+  const mins = Math.max(0, Math.round(diffMs / 60000));
+  if (mins < 1) return "Just now";
+  if (mins < 60) return `${mins}m ago`;
+  const hours = Math.round(mins / 60);
+  if (hours < 24) return `${hours}h ago`;
+  return `${Math.round(hours / 24)}d ago`;
+}
+
+function courseColor(index: number) {
+  return ["bg-emerald-500", "bg-blue-500", "bg-purple-500", "bg-amber-500", "bg-rose-500"][index % 5];
+}
+
+function toTeacherCourse(course: ApiCourse, index: number) {
+  return {
+    id: String(course.id),
+    name: course.title,
+    code: course.class_code,
+    students: course.student_ids.length,
+    subject: course.subject,
+    color: courseColor(index),
+    backendId: course.id,
+    description: course.description,
+  };
+}
+
+function toStudentCourse(course: ApiCourse) {
+  return {
+    id: String(course.id),
+    name: course.title,
+    code: course.class_code,
+    teacher: `Teacher #${course.teacher_id}`,
+    progress: 0,
+    backendId: course.id,
+  };
+}
+
+function toEnrollRequest(request: ApiEnrollmentRequest): EnrollRequest {
+  return {
+    id: request.id,
+    name: request.student_name,
+    initials: initialsFromName(request.student_name),
+    email: request.student_email,
+    code: `Course #${request.course_id}`,
+    course: request.course_title,
+    requestedAt: formatRelativeDate(request.requested_at),
+    status: request.status === "rejected" ? "denied" : request.status,
+  };
+}
+
 // ─── Upload Modal ─────────────────────────────────────────────────────────
 
 function UploadModal({ onClose, onUploaded }: {
@@ -586,19 +654,25 @@ function TeacherMaterials({ docs, setDocs, onUploadClick, onViewDoc }: {
 
 // ─── Enrollment Panel ─────────────────────────────────────────────────────
 
-function EnrollmentPanel({ requests, setRequests }: {
+function EnrollmentPanel({ requests, setRequests, onResolve }: {
   requests: EnrollRequest[];
   setRequests: React.Dispatch<React.SetStateAction<EnrollRequest[]>>;
+  onResolve?: (id: number, action: "approved" | "denied") => Promise<void>;
 }) {
   const pending = requests.filter(r => r.status === "pending");
   const resolved = requests.filter(r => r.status !== "pending");
 
-  const resolve = (id: number, action: "approved" | "denied") => {
+  const resolve = async (id: number, action: "approved" | "denied") => {
     const r = requests.find(r => r.id === id);
-    setRequests(prev => prev.map(r => r.id === id ? { ...r, status: action } : r));
     if (!r) return;
-    if (action === "approved") toast.success(`${r.name} approved for ${r.course}`);
-    else toast(`${r.name}'s request denied`, { icon: "—" });
+    try {
+      if (onResolve) await onResolve(id, action);
+      else setRequests(prev => prev.map(r => r.id === id ? { ...r, status: action } : r));
+      if (action === "approved") toast.success(`${r.name} approved for ${r.course}`);
+      else toast(`${r.name}'s request denied`, { icon: "—" });
+    } catch (error) {
+      toast.error(error instanceof Error ? error.message : "Could not update enrollment request");
+    }
   };
 
   return (
@@ -685,38 +759,62 @@ const COURSE_LOOKUP: Record<string, { name: string; teacher: string; subject: st
 
 type PendingRequest = { code: string; course: string; teacher: string; sentAt: string };
 
-function StudentEnroll() {
+function StudentEnroll({ studentId, enrolledCourses, onJoinRequested }: {
+  studentId: number | null;
+  enrolledCourses: ReturnType<typeof toStudentCourse>[];
+  onJoinRequested: () => Promise<void>;
+}) {
   const [code, setCode] = useState("");
   const [lookupState, setLookupState] = useState<"idle" | "looking" | "found" | "notfound">("idle");
   const [pendingRequests, setPendingRequests] = useState<PendingRequest[]>([]);
-  const [foundCourse, setFoundCourse] = useState<typeof COURSE_LOOKUP[string] | null>(null);
+  const [foundCourse, setFoundCourse] = useState<(typeof COURSE_LOOKUP[string] & { backendCode?: string }) | null>(null);
   const [submitting, setSubmitting] = useState(false);
   const [submitted, setSubmitted] = useState(false);
 
-  const lookup = () => {
+  const lookup = async () => {
     if (code.trim().length < 3) return;
     setLookupState("looking");
     setFoundCourse(null);
-    setTimeout(() => {
+    try {
+      const course = await api.getCourseByCode(code.toUpperCase());
+      setFoundCourse({
+        name: course.title,
+        teacher: `Teacher #${course.teacher_id}`,
+        subject: course.subject,
+        students: course.student_ids.length,
+        docs: 0,
+        backendCode: course.class_code,
+      });
+      setLookupState("found");
+    } catch {
       const match = COURSE_LOOKUP[code.toUpperCase()];
       if (match) { setFoundCourse(match); setLookupState("found"); }
       else setLookupState("notfound");
-    }, 700);
+    }
   };
 
-  const requestAccess = () => {
+  const requestAccess = async () => {
     if (!foundCourse) return;
+    if (!studentId) {
+      toast.error("Sign in as a student first");
+      return;
+    }
     setSubmitting(true);
-    setTimeout(() => {
-      setPendingRequests(prev => [...prev, { code: code.toUpperCase(), course: foundCourse.name, teacher: foundCourse.teacher, sentAt: "Just now" }]);
+    try {
+      const enrollment = await api.joinCourse({ student_id: studentId, class_code: code.toUpperCase() });
+      setPendingRequests(prev => [...prev, { code: code.toUpperCase(), course: enrollment.course_title, teacher: foundCourse.teacher, sentAt: "Just now" }]);
       setSubmitting(false);
       setSubmitted(true);
       setCode("");
       setLookupState("idle");
       setFoundCourse(null);
       toast.success(`Request sent to ${foundCourse.teacher}`);
+      await onJoinRequested();
       setTimeout(() => setSubmitted(false), 200);
-    }, 900);
+    } catch (error) {
+      toast.error(error instanceof Error ? error.message : "Could not send join request");
+      setSubmitting(false);
+    }
   };
 
   const cancelRequest = (code: string) => {
@@ -870,9 +968,7 @@ function StudentEnroll() {
       <div className="bg-muted/50 border border-border rounded-xl p-5">
         <h3 className="text-xs font-mono uppercase tracking-wide text-muted-foreground mb-4">My Enrolled Courses</h3>
         <div className="space-y-2">
-          {[
-            { name: "Biology 101", teacher: "Dr. Sarah Chen", code: "BIO-3F8K", progress: 82, status: "active" },
-          ].map(c => (
+          {(enrolledCourses.length ? enrolledCourses : STUDENT_COURSES).map(c => (
             <div key={c.code} className="flex items-center gap-3 bg-card border border-border rounded-xl px-4 py-3.5 shadow-sm">
               <div className="w-9 h-9 rounded-xl bg-emerald-50 flex items-center justify-center shrink-0">
                 <BookOpen size={16} className="text-emerald-600" />
@@ -1516,9 +1612,71 @@ function Landing({ onNavigate }: { onNavigate: (v: View, role?: "teacher" | "stu
 
 function Auth({ role, setRole, onBack, onEnter }: {
   role: "teacher" | "student"; setRole: (r: "teacher" | "student") => void;
-  onBack: () => void; onEnter: (r: "teacher" | "student") => void;
+  onBack: () => void; onEnter: (r: "teacher" | "student", account: ApiTeacher | ApiStudent) => void;
 }) {
   const [mode, setMode] = useState<"login" | "signup">("signup");
+  const [fullName, setFullName] = useState("");
+  const [email, setEmail] = useState("");
+  const [specialization, setSpecialization] = useState("English");
+  const [classCode, setClassCode] = useState("");
+  const [isSubmitting, setIsSubmitting] = useState(false);
+
+  const submit = async () => {
+    if (!email.trim()) {
+      toast.error("Email is required");
+      return;
+    }
+    if (mode === "signup" && !fullName.trim()) {
+      toast.error("Full name is required");
+      return;
+    }
+
+    setIsSubmitting(true);
+    try {
+      if (role === "teacher") {
+        const teacher = mode === "signup"
+          ? await api.createTeacher({
+              full_name: fullName.trim(),
+              email: email.trim(),
+              course_specializations: [specialization.trim() || "English"],
+            })
+          : (await api.listTeachers()).find(item => item.email.toLowerCase() === email.trim().toLowerCase());
+
+        if (!teacher) {
+          toast.error("No teacher account found with that email");
+          return;
+        }
+        toast.success(mode === "signup" ? "Teacher account created" : "Signed in");
+        onEnter("teacher", teacher);
+        return;
+      }
+
+      const student = mode === "signup"
+        ? await api.createStudent({ full_name: fullName.trim(), email: email.trim() })
+        : (await api.listStudents()).find(item => item.email.toLowerCase() === email.trim().toLowerCase());
+
+      if (!student) {
+        toast.error("No student account found with that email");
+        return;
+      }
+      if (mode === "signup" && classCode.trim()) {
+        try {
+          await api.joinCourse({ student_id: student.id, class_code: classCode.trim().toUpperCase() });
+          toast.success("Account created and join request sent");
+        } catch (error) {
+          toast.error(error instanceof Error ? error.message : "Account created, but class join failed");
+        }
+      } else {
+        toast.success(mode === "signup" ? "Student account created" : "Signed in");
+      }
+      onEnter("student", student);
+    } catch (error) {
+      toast.error(error instanceof Error ? error.message : "Something went wrong");
+    } finally {
+      setIsSubmitting(false);
+    }
+  };
+
   return (
     <div className="min-h-screen bg-background flex">
       <div className="hidden lg:flex flex-col bg-primary text-primary-foreground w-96 p-12 shrink-0">
@@ -1554,29 +1712,39 @@ function Auth({ role, setRole, onBack, onEnter }: {
             {mode === "signup" && (
               <div>
                 <label className="text-sm font-medium text-foreground block mb-1.5">Full name</label>
-                <input className="w-full border border-border rounded-lg px-3.5 py-2.5 text-sm bg-card focus:outline-none focus:ring-2 focus:ring-ring" placeholder={role === "teacher" ? "Dr. Sarah Chen" : "Amara Osei"} />
+                <input value={fullName} onChange={e => setFullName(e.target.value)} className="w-full border border-border rounded-lg px-3.5 py-2.5 text-sm bg-card focus:outline-none focus:ring-2 focus:ring-ring" placeholder={role === "teacher" ? "Dr. Sarah Chen" : "Amara Osei"} />
               </div>
             )}
             <div>
               <label className="text-sm font-medium text-foreground block mb-1.5">Email address</label>
-              <input type="email" className="w-full border border-border rounded-lg px-3.5 py-2.5 text-sm bg-card focus:outline-none focus:ring-2 focus:ring-ring" placeholder={role === "teacher" ? "sarah@university.edu" : "amara@student.edu"} />
+              <input type="email" value={email} onChange={e => setEmail(e.target.value)} className="w-full border border-border rounded-lg px-3.5 py-2.5 text-sm bg-card focus:outline-none focus:ring-2 focus:ring-ring" placeholder={role === "teacher" ? "teacher@edubridge.ai" : "student@edubridge.ai"} />
             </div>
             <div>
               <label className="text-sm font-medium text-foreground block mb-1.5">Password</label>
               <input type="password" className="w-full border border-border rounded-lg px-3.5 py-2.5 text-sm bg-card focus:outline-none focus:ring-2 focus:ring-ring" placeholder="••••••••" />
             </div>
             <AnimatePresence>
+              {mode === "signup" && role === "teacher" && (
+                <motion.div initial={{ opacity: 1, height: "auto" }} exit={{ opacity: 0, height: 0 }} transition={{ duration: 0.2 }}>
+                  <label className="text-sm font-medium text-foreground block mb-1.5">Course specialization</label>
+                  <input value={specialization} onChange={e => setSpecialization(e.target.value)} className="w-full border border-border rounded-lg px-3.5 py-2.5 text-sm bg-card focus:outline-none focus:ring-2 focus:ring-ring" placeholder="English" />
+                </motion.div>
+              )}
+            </AnimatePresence>
+            <AnimatePresence>
               {mode === "signup" && role === "student" && (
                 <motion.div initial={{ opacity: 1, height: "auto" }} exit={{ opacity: 0, height: 0 }} transition={{ duration: 0.2 }}>
                   <label className="text-sm font-medium text-foreground block mb-1.5">Class code <span className="text-muted-foreground font-normal">(optional)</span></label>
-                  <input className="w-full border border-border rounded-lg px-3.5 py-2.5 text-sm bg-card focus:outline-none focus:ring-2 focus:ring-ring font-mono" placeholder="BIO-3F8K" />
+                  <input value={classCode} onChange={e => setClassCode(e.target.value.toUpperCase())} className="w-full border border-border rounded-lg px-3.5 py-2.5 text-sm bg-card focus:outline-none focus:ring-2 focus:ring-ring font-mono" placeholder="ENG-SS1U" />
                 </motion.div>
               )}
             </AnimatePresence>
           </div>
-          <motion.button whileHover={{ scale: 1.01 }} whileTap={{ scale: 0.98 }} onClick={() => onEnter(role)}
-            className="w-full bg-primary text-primary-foreground font-semibold py-3 rounded-lg shadow-sm"
+          <motion.button whileHover={{ scale: 1.01 }} whileTap={{ scale: 0.98 }} onClick={submit}
+            disabled={isSubmitting}
+            className="w-full bg-primary text-primary-foreground font-semibold py-3 rounded-lg shadow-sm disabled:opacity-60 flex items-center justify-center gap-2"
           >
+            {isSubmitting && <RefreshCw size={15} className="animate-spin" />}
             {mode === "signup" ? `Create ${role} account` : "Sign in"}
           </motion.button>
           <p className="text-center text-sm text-muted-foreground mt-5 font-light">
@@ -1655,19 +1823,59 @@ function Sidebar<T extends string>({
 
 // ─── Teacher Dashboard ────────────────────────────────────────────────────
 
-function TeacherDashboard({ onLogout, onSwitch, darkMode, setDarkMode }: { onLogout: () => void; onSwitch: () => void; darkMode: boolean; setDarkMode: (v: boolean) => void }) {
+function TeacherDashboard({ teacher, onLogout, onSwitch, darkMode, setDarkMode }: { teacher: ApiTeacher | null; onLogout: () => void; onSwitch: () => void; darkMode: boolean; setDarkMode: (v: boolean) => void }) {
   const [tab, setTab] = useState<TeacherTab>("overview");
   const [sidebarOpen, setSidebarOpen] = useState(false);
   const [uploadOpen, setUploadOpen] = useState(false);
   const [courseCreateOpen, setCourseCreateOpen] = useState(false);
   const [notifOpen, setNotifOpen] = useState(false);
   const [searchQuery, setSearchQuery] = useState("");
-  const [selectedCourse, setSelectedCourse] = useState(TEACHER_COURSES[0]);
+  const [teacherCourses, setTeacherCourses] = useState(TEACHER_COURSES.map((course, index) => ({ ...course, backendId: index + 1, description: "" })));
+  const [selectedCourse, setSelectedCourse] = useState(teacherCourses[0]);
   const [docs, setDocs] = useState<UploadedDoc[]>(INITIAL_DOCS);
-  const [requests, setRequests] = useState<EnrollRequest[]>(INITIAL_REQUESTS);
+  const [requests, setRequests] = useState<EnrollRequest[]>([]);
   const [notifications, setNotifications] = useState<Notification[]>(INITIAL_NOTIFICATIONS);
   const [announcements, setAnnouncements] = useState<Announcement[]>(INITIAL_ANNOUNCEMENTS);
   const [viewingDoc, setViewingDoc] = useState<UploadedDoc | null>(null);
+  const [isWorkspaceLoading, setIsWorkspaceLoading] = useState(false);
+
+  const loadWorkspace = useCallback(async () => {
+    if (!teacher) {
+      setRequests(INITIAL_REQUESTS);
+      return;
+    }
+    setIsWorkspaceLoading(true);
+    try {
+      const workspace = await api.getTeacherWorkspace(teacher.id);
+      const nextCourses = workspace.courses.map(toTeacherCourse);
+      setTeacherCourses(nextCourses.length ? nextCourses : []);
+      setSelectedCourse(current => nextCourses.find(course => course.id === current?.id) ?? nextCourses[0] ?? current);
+      setRequests(workspace.pending_requests.map(toEnrollRequest));
+    } catch (error) {
+      toast.error(error instanceof Error ? error.message : "Could not load teacher workspace");
+    } finally {
+      setIsWorkspaceLoading(false);
+    }
+  }, [teacher]);
+
+  useEffect(() => {
+    loadWorkspace();
+  }, [loadWorkspace]);
+
+  const resolveEnrollment = async (id: number, action: "approved" | "denied") => {
+    const updated = await api.decideEnrollment(id, action === "approved" ? "approved" : "rejected");
+    setRequests(prev => prev.map(r => r.id === id ? toEnrollRequest(updated) : r));
+    await loadWorkspace();
+  };
+
+  const createCourse = async (title: string, subject: string, description: string) => {
+    if (!teacher) throw new Error("Sign in as a teacher first");
+    const course = await api.createCourse({ teacher_id: teacher.id, title, subject, description });
+    const mapped = toTeacherCourse(course, teacherCourses.length);
+    setTeacherCourses(prev => [mapped, ...prev]);
+    setSelectedCourse(mapped);
+    return course.class_code;
+  };
 
   const pendingCount = requests.filter(r => r.status === "pending").length;
   const unreadCount = notifications.filter(n => !n.read).length;
@@ -1682,7 +1890,7 @@ function TeacherDashboard({ onLogout, onSwitch, darkMode, setDarkMode }: { onLog
 
   return (
     <div className="min-h-screen flex bg-background">
-      <Sidebar title="EduBridge AI" subtitle="Teacher Portal" initials="SC" name="Dr. Sarah Chen" role="teacher"
+      <Sidebar title="EduBridge AI" subtitle="Teacher Portal" initials={initialsFromName(teacher?.full_name ?? "Dr. Sarah Chen")} name={teacher?.full_name ?? "Dr. Sarah Chen"} role="teacher"
         items={navItems} activeTab={tab} setTab={setTab} onLogout={onLogout} open={sidebarOpen} setOpen={setSidebarOpen} />
       <div className="flex-1 lg:ml-64 flex flex-col min-h-screen">
         <header className="sticky top-0 z-20 bg-background/95 backdrop-blur-sm border-b border-border h-14 flex items-center px-4 lg:px-6 gap-3">
@@ -1691,10 +1899,10 @@ function TeacherDashboard({ onLogout, onSwitch, darkMode, setDarkMode }: { onLog
           <div className="relative hidden md:block">
             <select
               value={selectedCourse.id}
-              onChange={e => setSelectedCourse(TEACHER_COURSES.find(c => c.id === e.target.value)!)}
+              onChange={e => setSelectedCourse(teacherCourses.find(c => c.id === e.target.value)!)}
               className="appearance-none bg-muted border border-border text-sm font-medium text-foreground rounded-xl pl-3 pr-8 py-1.5 focus:outline-none focus:ring-2 focus:ring-ring cursor-pointer"
             >
-              {TEACHER_COURSES.map(c => <option key={c.id} value={c.id}>{c.name}</option>)}
+              {teacherCourses.map(c => <option key={c.id} value={c.id}>{c.name}</option>)}
             </select>
             <ChevronDown size={12} className="absolute right-2.5 top-1/2 -translate-y-1/2 text-muted-foreground pointer-events-none" />
           </div>
@@ -1733,7 +1941,7 @@ function TeacherDashboard({ onLogout, onSwitch, darkMode, setDarkMode }: { onLog
                 </span>
               )}
             </button>
-            <div className="w-8 h-8 rounded-full bg-primary flex items-center justify-center text-primary-foreground text-xs font-bold">SC</div>
+            <div className="w-8 h-8 rounded-full bg-primary flex items-center justify-center text-primary-foreground text-xs font-bold">{initialsFromName(teacher?.full_name ?? "SC")}</div>
           </div>
         </header>
         <main className="flex-1 p-6 lg:p-8">
@@ -1744,9 +1952,12 @@ function TeacherDashboard({ onLogout, onSwitch, darkMode, setDarkMode }: { onLog
               {tab === "overview" && (
                 <TeacherOverview
                   requests={requests} setRequests={setRequests}
+                  onResolveEnrollment={resolveEnrollment}
                   announcements={announcements} setAnnouncements={setAnnouncements}
                   onGoMaterials={() => setTab("materials")}
                   course={selectedCourse}
+                  isWorkspaceLoading={isWorkspaceLoading}
+                  teacherName={teacher?.full_name ?? "Dr. Sarah Chen"}
                 />
               )}
               {tab === "students" && <TeacherStudents searchQuery={searchQuery} />}
@@ -1769,9 +1980,7 @@ function TeacherDashboard({ onLogout, onSwitch, darkMode, setDarkMode }: { onLog
         {courseCreateOpen && (
           <CourseCreateModal
             onClose={() => setCourseCreateOpen(false)}
-            onCreate={(name, code) => {
-              toast.success(`"${name}" is live — code ${code}`);
-            }}
+            onCreate={createCourse}
           />
         )}
         {viewingDoc && <DocViewerModal doc={viewingDoc} onClose={() => setViewingDoc(null)} />}
@@ -1787,13 +1996,16 @@ function TeacherDashboard({ onLogout, onSwitch, darkMode, setDarkMode }: { onLog
   );
 }
 
-function TeacherOverview({ requests, setRequests, onGoMaterials, announcements, setAnnouncements, course }: {
+function TeacherOverview({ requests, setRequests, onResolveEnrollment, onGoMaterials, announcements, setAnnouncements, course, isWorkspaceLoading, teacherName }: {
   requests: EnrollRequest[];
   setRequests: React.Dispatch<React.SetStateAction<EnrollRequest[]>>;
+  onResolveEnrollment?: (id: number, action: "approved" | "denied") => Promise<void>;
   onGoMaterials: () => void;
   announcements: Announcement[];
   setAnnouncements: React.Dispatch<React.SetStateAction<Announcement[]>>;
   course: typeof TEACHER_COURSES[number];
+  isWorkspaceLoading?: boolean;
+  teacherName: string;
 }) {
   const [composing, setComposing] = useState(false);
   const [newTitle, setNewTitle] = useState("");
@@ -1812,8 +2024,8 @@ function TeacherOverview({ requests, setRequests, onGoMaterials, announcements, 
   return (
     <div>
       <div className="mb-8">
-        <h1 className="font-display text-2xl text-primary">Good morning, Dr. Chen</h1>
-        <p className="text-sm text-muted-foreground mt-1 font-light">Here's what's happening across your courses today.</p>
+        <h1 className="font-display text-2xl text-primary">Good morning, {teacherName}</h1>
+        <p className="text-sm text-muted-foreground mt-1 font-light">{isWorkspaceLoading ? "Syncing your backend workspace..." : "Here's what's happening across your courses today."}</p>
       </div>
       <div className="grid grid-cols-2 lg:grid-cols-4 gap-4 mb-10">
         {[
@@ -1891,7 +2103,7 @@ function TeacherOverview({ requests, setRequests, onGoMaterials, announcements, 
           <div className="mb-4">
             <h2 className="font-semibold text-foreground">Enrollment Requests</h2>
           </div>
-          <EnrollmentPanel requests={requests} setRequests={setRequests} />
+          <EnrollmentPanel requests={requests} setRequests={setRequests} onResolve={onResolveEnrollment} />
         </div>
       </div>
       <div className="mb-10">
@@ -2256,7 +2468,7 @@ function TeacherAnalytics({ course }: { course: typeof TEACHER_COURSES[number] }
 
 // ─── Student Dashboard ────────────────────────────────────────────────────
 
-function StudentDashboard({ onLogout, onSwitch, darkMode, setDarkMode }: { onLogout: () => void; onSwitch: () => void; darkMode: boolean; setDarkMode: (v: boolean) => void }) {
+function StudentDashboard({ student, onLogout, onSwitch, darkMode, setDarkMode }: { student: ApiStudent | null; onLogout: () => void; onSwitch: () => void; darkMode: boolean; setDarkMode: (v: boolean) => void }) {
   const [tab, setTab] = useState<StudentTab>("workspace");
   const [messages, setMessages] = useState<ChatMessage[]>(INITIAL_CHAT);
   const [input, setInput] = useState("");
@@ -2264,7 +2476,26 @@ function StudentDashboard({ onLogout, onSwitch, darkMode, setDarkMode }: { onLog
   const [selectedAnswer, setSelectedAnswer] = useState<number | null>(null);
   const [showExplanation, setShowExplanation] = useState(false);
   const [sidebarOpen, setSidebarOpen] = useState(false);
-  const [selectedCourse, setSelectedCourse] = useState(STUDENT_COURSES[0]);
+  const [studentCourses, setStudentCourses] = useState(STUDENT_COURSES.map((course, index) => ({ ...course, backendId: index + 1 })));
+  const [selectedCourse, setSelectedCourse] = useState(studentCourses[0]);
+
+  const loadWorkspace = useCallback(async () => {
+    if (!student) return;
+    try {
+      const workspace = await api.getStudentWorkspace(student.id);
+      const nextCourses = workspace.courses.map(toStudentCourse);
+      if (nextCourses.length) {
+        setStudentCourses(nextCourses);
+        setSelectedCourse(current => nextCourses.find(course => course.id === current?.id) ?? nextCourses[0]);
+      }
+    } catch (error) {
+      toast.error(error instanceof Error ? error.message : "Could not load student workspace");
+    }
+  }, [student]);
+
+  useEffect(() => {
+    loadWorkspace();
+  }, [loadWorkspace]);
 
   const navItems: { id: StudentTab; label: string; icon: React.ElementType }[] = [
     { id: "workspace", label: "Course Q&A", icon: MessageSquare },
@@ -2274,23 +2505,44 @@ function StudentDashboard({ onLogout, onSwitch, darkMode, setDarkMode }: { onLog
     { id: "settings", label: "Settings", icon: Settings },
   ];
 
-  const handleSend = () => {
+  const handleSend = async () => {
     if (!input.trim()) return;
-    setMessages(prev => [...prev, { role: "user", text: input }]);
+    const question = input;
+    setMessages(prev => [...prev, { role: "user", text: question }]);
     setInput("");
     setIsTyping(true);
-    const resp = CANNED_RESPONSES[Math.floor(Math.random() * CANNED_RESPONSES.length)];
-    setTimeout(() => { setIsTyping(false); setMessages(prev => [...prev, resp]); }, 1800);
+    try {
+      if (!student || !selectedCourse?.backendId) throw new Error("Choose an approved course first");
+      const answer = await api.askTutor({
+        student_id: student.id,
+        course_id: selectedCourse.backendId,
+        question,
+      });
+      setMessages(prev => [...prev, {
+        role: "ai",
+        text: answer.answer,
+        citations: answer.citations,
+        misconception: answer.unsupported ? "Unsupported by indexed course material for now. This will become RAG-grounded in the AI phase." : null,
+      }]);
+    } catch (error) {
+      const fallback = CANNED_RESPONSES[Math.floor(Math.random() * CANNED_RESPONSES.length)];
+      setMessages(prev => [...prev, {
+        ...fallback,
+        text: error instanceof Error ? `${fallback.text}\n\nBackend note: ${error.message}` : fallback.text,
+      }]);
+    } finally {
+      setIsTyping(false);
+    }
   };
 
   const courseExtra = (
     <div className="p-4 border-b border-primary-foreground/10">
       <div className="text-xs text-primary-foreground/35 font-mono uppercase tracking-wide mb-2">Current Course</div>
-      {STUDENT_COURSES.length > 1 ? (
+      {studentCourses.length > 1 ? (
         <div className="relative">
-          <select value={selectedCourse.id} onChange={e => setSelectedCourse(STUDENT_COURSES.find(c => c.id === e.target.value)!)}
+          <select value={selectedCourse.id} onChange={e => setSelectedCourse(studentCourses.find(c => c.id === e.target.value)!)}
             className="w-full appearance-none bg-primary-foreground/10 text-primary-foreground text-sm font-semibold rounded-lg px-3 py-2 pr-7 focus:outline-none cursor-pointer">
-            {STUDENT_COURSES.map(c => <option key={c.id} value={c.id} style={{ color: "black" }}>{c.name}</option>)}
+            {studentCourses.map(c => <option key={c.id} value={c.id} style={{ color: "black" }}>{c.name}</option>)}
           </select>
           <ChevronDown size={11} className="absolute right-2.5 top-1/2 -translate-y-1/2 text-primary-foreground/50 pointer-events-none" />
         </div>
@@ -2305,7 +2557,7 @@ function StudentDashboard({ onLogout, onSwitch, darkMode, setDarkMode }: { onLog
 
   return (
     <div className="min-h-screen flex bg-background">
-      <Sidebar title="EduBridge AI" subtitle="Student Portal" initials="AO" name="Amara Osei" role="student"
+      <Sidebar title="EduBridge AI" subtitle="Student Portal" initials={initialsFromName(student?.full_name ?? "Amara Osei")} name={student?.full_name ?? "Amara Osei"} role="student"
         items={navItems} activeTab={tab} setTab={setTab} onLogout={onLogout} open={sidebarOpen} setOpen={setSidebarOpen}
         extra={courseExtra} />
       <div className="flex-1 lg:ml-64 flex flex-col min-h-screen">
@@ -2334,7 +2586,7 @@ function StudentDashboard({ onLogout, onSwitch, darkMode, setDarkMode }: { onLog
               {tab === "workspace" && <StudentWorkspace messages={messages} isTyping={isTyping} input={input} setInput={setInput} onSend={handleSend} announcements={INITIAL_ANNOUNCEMENTS} course={selectedCourse} />}
               {tab === "quiz" && <StudentQuiz selectedAnswer={selectedAnswer} setSelectedAnswer={setSelectedAnswer} showExplanation={showExplanation} setShowExplanation={setShowExplanation} />}
               {tab === "progress" && <StudentProgress onGoQuiz={() => setTab("quiz")} />}
-              {tab === "enroll" && <StudentEnroll />}
+              {tab === "enroll" && <StudentEnroll studentId={student?.id ?? null} enrolledCourses={studentCourses} onJoinRequested={loadWorkspace} />}
               {tab === "settings" && <StudentSettings darkMode={darkMode} setDarkMode={setDarkMode} />}
             </motion.div>
           </AnimatePresence>
@@ -2963,7 +3215,7 @@ function DocViewerModal({ doc, onClose }: { doc: UploadedDoc; onClose: () => voi
 const SUBJECT_OPTIONS = ["Biology", "Chemistry", "Physics", "Mathematics", "Computer Science", "History", "English", "Other"];
 const DEFAULT_TOPICS = ["Cell Biology", "Genetics", "Evolution", "Ecology", "Biochemistry", "Anatomy"];
 
-function CourseCreateModal({ onClose, onCreate }: { onClose: () => void; onCreate: (name: string, code: string) => void }) {
+function CourseCreateModal({ onClose, onCreate }: { onClose: () => void; onCreate: (name: string, subject: string, description: string) => Promise<string> }) {
   const [step, setStep] = useState<1 | 2 | 3>(1);
   const [name, setName] = useState("");
   const [subject, setSubject] = useState("Biology");
@@ -2971,16 +3223,23 @@ function CourseCreateModal({ onClose, onCreate }: { onClose: () => void; onCreat
   const [topics, setTopics] = useState(DEFAULT_TOPICS.map(t => ({ name: t, weight: "medium" as "high" | "medium" | "low", enabled: true })));
   const [generatedCode, setGeneratedCode] = useState("");
   const [copied, setCopied] = useState(false);
-
-  const generateCode = () => {
-    const prefix = subject.slice(0, 3).toUpperCase();
-    const suffix = Math.random().toString(36).slice(2, 6).toUpperCase();
-    return `${prefix}-${suffix}`;
-  };
+  const [isCreating, setIsCreating] = useState(false);
 
   const goStep2 = () => { if (!name.trim()) return; setStep(2); };
-  const goStep3 = () => { const code = generateCode(); setGeneratedCode(code); setStep(3); };
-  const finish = () => { onCreate(name, generatedCode); onClose(); toast.success(`Course "${name}" created!`); };
+  const goStep3 = async () => {
+    setIsCreating(true);
+    try {
+      const code = await onCreate(name, subject, description);
+      setGeneratedCode(code);
+      setStep(3);
+      toast.success(`Course "${name}" created!`);
+    } catch (error) {
+      toast.error(error instanceof Error ? error.message : "Could not create course");
+    } finally {
+      setIsCreating(false);
+    }
+  };
+  const finish = () => { onClose(); toast.success(`"${name}" is live — code ${generatedCode}`); };
 
   const copyCode = () => {
     navigator.clipboard.writeText(generatedCode);
@@ -3143,7 +3402,9 @@ function CourseCreateModal({ onClose, onCreate }: { onClose: () => void; onCreat
           {step === 2 && (
             <motion.button whileHover={{ scale: 1.01 }} whileTap={{ scale: 0.98 }}
               onClick={goStep3}
-              className="bg-primary text-primary-foreground px-5 py-2.5 rounded-xl text-sm font-semibold shadow-sm">
+              disabled={isCreating}
+              className="bg-primary text-primary-foreground px-5 py-2.5 rounded-xl text-sm font-semibold shadow-sm disabled:opacity-60 flex items-center gap-2">
+              {isCreating && <RefreshCw size={14} className="animate-spin" />}
               Generate Class Code →
             </motion.button>
           )}
@@ -3473,14 +3734,25 @@ export default function App() {
   const [view, setView] = useState<View>("landing");
   const [role, setRole] = useState<"teacher" | "student">("teacher");
   const [darkMode, setDarkMode] = useState(false);
+  const [session, setSession] = useState<DemoSession>({ teacher: null, student: null });
   const go = (v: View, r?: "teacher" | "student") => { if (r) setRole(r); setView(v); };
+  const enterAuthenticated = (nextRole: "teacher" | "student", account: ApiTeacher | ApiStudent) => {
+    setRole(nextRole);
+    setSession(prev => nextRole === "teacher"
+      ? { ...prev, teacher: account as ApiTeacher }
+      : { ...prev, student: account as ApiStudent });
+    setView(nextRole);
+  };
+  const logout = () => {
+    setView("landing");
+  };
   return (
     <div className={darkMode ? "dark" : ""}>
       <Toaster position="bottom-right" toastOptions={{ style: { fontFamily: "Outfit, sans-serif", fontSize: "14px" } }} />
       {view === "landing" && <Landing onNavigate={go} />}
-      {view === "auth" && <Auth role={role} setRole={setRole} onBack={() => setView("landing")} onEnter={r => setView(r)} />}
-      {view === "teacher" && <TeacherDashboard onLogout={() => setView("landing")} onSwitch={() => setView("student")} darkMode={darkMode} setDarkMode={setDarkMode} />}
-      {view === "student" && <StudentDashboard onLogout={() => setView("landing")} onSwitch={() => setView("teacher")} darkMode={darkMode} setDarkMode={setDarkMode} />}
+      {view === "auth" && <Auth role={role} setRole={setRole} onBack={() => setView("landing")} onEnter={enterAuthenticated} />}
+      {view === "teacher" && <TeacherDashboard teacher={session.teacher} onLogout={logout} onSwitch={() => setView("student")} darkMode={darkMode} setDarkMode={setDarkMode} />}
+      {view === "student" && <StudentDashboard student={session.student} onLogout={logout} onSwitch={() => setView("teacher")} darkMode={darkMode} setDarkMode={setDarkMode} />}
     </div>
   );
 }

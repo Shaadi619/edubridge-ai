@@ -79,10 +79,13 @@ Implemented:
 - Material upload endpoint
 - Tutor and misconception placeholder endpoints
 - Analytics placeholder endpoints
+- Typed frontend API client
+- Frontend account creation/login connected to backend demo accounts
+- Teacher workspace, course creation, enrollment decisions, student join, and tutor ask connected to backend endpoints
 
 Next:
 
-- Connect frontend forms and dashboards to API state
+- Replace remaining static dashboard analytics and materials data with API state
 - Add proper authentication
 - Add document text extraction
 - Add RAG retrieval and source-grounded AI answers
