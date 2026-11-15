@@ -34,3 +34,20 @@ uvicorn app.main:app --reload
 The API is available at `http://localhost:8000`; its health endpoint is
 `GET /api/v1/health`.
 
+
+## Checks
+
+CI (`.github/workflows/ci.yml`) runs these on every push to `main` and on pull
+requests. Run them locally before committing:
+
+```bash
+# From apps/api, inside its virtual environment
+python -m pytest -q
+
+# From apps/web
+npm run typecheck && npm run build
+```
+
+The tests use placeholder settings and mocked AI providers, so they need no
+real credentials. The SQL regression in `apps/api/tests/sql/` is not in CI yet:
+run it manually against a disposable database with all migrations applied.
