@@ -209,9 +209,13 @@ async def my_courses(user: AuthenticatedUser = Depends(current_user), settings: 
         ids = [row["course_id"] for row in enrollments.json()]
         if not ids:
             return []
-        courses = await client.get(f"{base}/rest/v1/courses", headers=headers, params={"id": f"in.({','.join(ids)})", "select": "id,name,subject,enrollment_code,teacher_id"})
+        params = {"id": f"in.({','.join(ids)})", "select": "id,name,subject,enrollment_code,teacher_id,show_work_enabled"}
+        courses = await client.get(f"{base}/rest/v1/courses", headers=headers, params=params)
+        if courses.status_code == 400:
+            # The show_work_enabled migration has not been applied yet: treat the feature as off.
+            courses = await client.get(f"{base}/rest/v1/courses", headers=headers, params={**params, "select": "id,name,subject,enrollment_code,teacher_id"})
         courses.raise_for_status()
-        rows = courses.json()
+        rows = [{"show_work_enabled": False, **row} for row in courses.json()]
         teacher_ids = {row["teacher_id"] for row in rows}
         teachers = await client.get(f"{base}/rest/v1/profiles", headers=headers, params={"id": f"in.({','.join(teacher_ids)})", "select": "id,display_name"})
         teachers.raise_for_status()

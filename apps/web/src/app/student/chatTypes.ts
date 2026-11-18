@@ -17,6 +17,8 @@ export type StudentCourse = {
   code: string;
   teacher: string;
   progress: number;
+  /** Show Your Work is opt-in per course. */
+  showWork: boolean;
 };
 
 export type UserMessage = { role: "user"; text: string };

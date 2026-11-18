@@ -37,8 +37,8 @@ const CheckDialog = lazy(() => import("./student/CheckDialog"));
 
 type View = "landing" | "auth" | "teacher" | "student" | "admin";
 type TeacherTab = "overview" | "students" | "analytics" | "materials" | "settings";
-type StudentTab = "workspace" | "work" | "lab" | "quiz" | "progress" | "enroll" | "settings";
-const STUDENT_TABS: readonly string[] = ["workspace", "work", "lab", "quiz", "progress", "enroll", "settings"];
+type StudentTab = "workspace" | "work" | "quiz" | "progress" | "enroll" | "settings";
+const STUDENT_TABS: readonly string[] = ["workspace", "work", "quiz", "progress", "enroll", "settings"];
 type InterventionQueueItem = Awaited<ReturnType<typeof api.teacherCourseAnalytics>>["intervention_queue"][number];
 
 
@@ -280,6 +280,7 @@ type TeacherCourse = {
   description: string | null;
   color: string;
   created_at: string;
+  showWork: boolean;
 };
 
 type CourseRow = {
@@ -289,6 +290,7 @@ type CourseRow = {
   description: string | null;
   enrollment_code: string;
   created_at: string;
+  show_work_enabled?: boolean;
 };
 
 const courseFromRow = (row: CourseRow): TeacherCourse => ({
@@ -300,6 +302,7 @@ const courseFromRow = (row: CourseRow): TeacherCourse => ({
   description: row.description,
   color: "bg-emerald-500",
   created_at: row.created_at,
+  showWork: Boolean(row.show_work_enabled),
 });
 
 
@@ -1910,21 +1913,39 @@ function TeacherDashboard({ onLogout, darkMode, setDarkMode }: { onLogout: () =>
   const pendingCount = requests.filter(r => r.status === "pending").length;
   const unreadCount = notifications.filter(n => !n.read).length;
 
+  const setCourseShowWork = async (courseId: string, enabled: boolean) => {
+    if (!supabase) return;
+    const { error } = await supabase.from("courses").update({ show_work_enabled: enabled }).eq("id", courseId);
+    if (error) {
+      toast.error(/show_work_enabled/.test(error.message)
+        ? "This setting needs the latest database update. Apply the Show Your Work migration in Supabase first."
+        : error.message);
+      return;
+    }
+    setCourses(current => current.map(course => course.id === courseId ? { ...course, showWork: enabled } : course));
+    toast.success(enabled ? "Show Your Work is on for this course" : "Show Your Work is off for this course");
+  };
+
   const loadCourses = useCallback(async () => {
     if (!supabase || !user) return;
     setCoursesLoading(true);
-    const { data, error } = await supabase
+    const query = (columns: string) => supabase!
       .from("courses")
-      .select("id, name, subject, description, enrollment_code, created_at")
+      .select(columns)
       .eq("teacher_id", user.id)
       .is("archived_at", null)
       .order("created_at", { ascending: false });
+    let { data, error } = await query("id, name, subject, description, enrollment_code, created_at, show_work_enabled");
+    if (error && /show_work_enabled/.test(error.message)) {
+      // The Show Your Work migration hasn't been applied yet; load courses without it.
+      ({ data, error } = await query("id, name, subject, description, enrollment_code, created_at"));
+    }
     setCoursesLoading(false);
     if (error) {
       toast.error(error.message);
       return;
     }
-    const loaded = ((data ?? []) as CourseRow[]).map(courseFromRow);
+    const loaded = ((data ?? []) as unknown as CourseRow[]).map(courseFromRow);
     setCourses(loaded);
     setSelectedCourse(current => loaded.find(course => course.id === current?.id) ?? loaded[0] ?? null);
   }, [user]);
@@ -2236,7 +2257,7 @@ function TeacherDashboard({ onLogout, darkMode, setDarkMode }: { onLogout: () =>
               {tab === "materials" && selectedCourse && (
                 <TeacherMaterials docs={docs} setDocs={setDocs} onUploadClick={() => setUploadOpen(true)} onViewDoc={setViewingDoc} courseName={selectedCourse.name} />
               )}
-              {tab === "settings" && <TeacherSettings courses={courses} darkMode={darkMode} setDarkMode={setDarkMode} />}
+              {tab === "settings" && <TeacherSettings courses={courses} darkMode={darkMode} setDarkMode={setDarkMode} onShowWorkChange={(id, enabled) => void setCourseShowWork(id, enabled)} />}
             </motion.div>
           </AnimatePresence>
         </main>
@@ -3329,7 +3350,7 @@ function StudentDashboard({ onLogout, darkMode, setDarkMode }: { onLogout: () =>
   const loadStudentCourses = useCallback(async () => {
     if (!session) return [];
     const rows = await api.myCourses(session.access_token);
-    const loaded = rows.map(row => ({ id: row.id, name: row.name, code: row.enrollment_code, teacher: row.teacher, progress: 0 }));
+    const loaded = rows.map(row => ({ id: row.id, name: row.name, code: row.enrollment_code, teacher: row.teacher, progress: 0, showWork: Boolean(row.show_work_enabled) }));
     setStudentCourses(loaded);
     setCourseLoadState("ready");
     setSelectedCourse(current => loaded.find(course => course.id === (current?.id ?? initialLocation.courseId)) ?? loaded[0] ?? null);
@@ -3398,10 +3419,13 @@ function StudentDashboard({ onLogout, darkMode, setDarkMode }: { onLogout: () =>
     return () => { void realtimeClient.removeChannel(channel); };
   }, [loadStudentCourses, courseId, refreshCourseAnnouncements, session, user]);
 
+  useEffect(() => {
+    if (tab === "work" && selectedCourse && !selectedCourse.showWork) setTab("workspace");
+  }, [tab, selectedCourse]);
+
   const navItems: { id: StudentTab; label: string; icon: React.ElementType }[] = [
     { id: "workspace", label: "Course Q&A", icon: MessageSquare },
-    { id: "work", label: "Show Your Work", icon: Pencil },
-    { id: "lab", label: "Concept Lab", icon: Layers },
+    ...(selectedCourse?.showWork ? [{ id: "work" as StudentTab, label: "Show Your Work", icon: Pencil }] : []),
     { id: "quiz", label: "Quiz", icon: Target },
     { id: "progress", label: "My Progress", icon: TrendingUp },
     { id: "enroll", label: "Join Course", icon: Plus },
@@ -3536,7 +3560,6 @@ function StudentDashboard({ onLogout, darkMode, setDarkMode }: { onLogout: () =>
           <h1 className="font-semibold text-foreground text-sm">
             {tab === "workspace" && `Course Q&A${selectedCourse ? ` — ${selectedCourse.name}` : ""}`}
             {tab === "work" && "Show Your Work"}
-            {tab === "lab" && "Concept Lab"}
             {tab === "quiz" && "Adaptive Quiz"}
             {tab === "progress" && "My Progress"}
             {tab === "enroll" && "Join a Course"}
@@ -3571,10 +3594,8 @@ function StudentDashboard({ onLogout, darkMode, setDarkMode }: { onLogout: () =>
               transition={{ duration: 0.18, ease: "easeOut" }} className="h-full"
             >
               {tab === "workspace" && selectedCourse && <Suspense fallback={<div role="status" className="eb-stage h-[calc(100vh-3.5rem)] p-10 text-sm text-[#A9B6C2]">Opening Q&amp;A…</div>}><AskWorkspace messages={messages} isTyping={isTyping} tutorStatus={tutorStatus} historyStatus={historyStatus} onRetryHistory={() => void restoreHistory()} input={input} setInput={setInput} onSend={() => void handleSend()} onExplain={(index, format) => void handleAlternativeExplanation(index, format)} announcements={courseAnnouncements ?? []} course={selectedCourse} /></Suspense>}
-              {tab === "work" && selectedCourse && session && <StudentShowWork courseId={selectedCourse.id} courseName={selectedCourse.name} accessToken={session.access_token} />}
+              {tab === "work" && selectedCourse?.showWork && session && <StudentShowWork courseId={selectedCourse.id} courseName={selectedCourse.name} accessToken={session.access_token} />}
               {tab === "work" && !selectedCourse && <div className="p-8 text-sm text-muted-foreground">Join an approved course before submitting work.</div>}
-              {tab === "lab" && selectedCourse && session && <StudentConceptLab courseId={selectedCourse.id} courseName={selectedCourse.name} accessToken={session.access_token} />}
-              {tab === "lab" && !selectedCourse && <div className="p-8 text-sm text-muted-foreground">Join an approved course before opening the Concept Lab.</div>}
               {tab === "quiz" && !selectedCourse && <div role="status" className="p-8 text-sm text-muted-foreground">{courseStatus ?? "Join an approved course before generating a quiz."}</div>}
               {tab === "progress" && selectedCourse && session && <Suspense fallback={<div role="status" className="eb-stage min-h-[calc(100vh-3.5rem)] p-10 text-sm text-[#A9B6C2]">Opening your progress…</div>}>
                 <ProgressStage courseId={selectedCourse.id} courseName={selectedCourse.name} accessToken={session.access_token}
@@ -3694,143 +3715,6 @@ function StudentShowWork({ courseId, courseName, accessToken }: { courseId: stri
     </div>}
   </div>;
 }
-
-function StudentConceptLab({ courseId, courseName, accessToken }: { courseId: string; courseName: string; accessToken: string }) {
-  type Walkthrough = Awaited<ReturnType<typeof api.generateWalkthrough>>;
-  const [focus, setFocus] = useState("");
-  const [walkthrough, setWalkthrough] = useState<Walkthrough | null>(null);
-  const [generating, setGenerating] = useState(false);
-  const [stepIndex, setStepIndex] = useState(0);
-  const [selectedOption, setSelectedOption] = useState<number | null>(null);
-  const [checked, setChecked] = useState(false);
-  const [completed, setCompleted] = useState(false);
-
-  useEffect(() => {
-    setFocus("");
-    setWalkthrough(null);
-    setStepIndex(0);
-    setSelectedOption(null);
-    setChecked(false);
-    setCompleted(false);
-  }, [courseId]);
-
-  const generate = async () => {
-    if (focus.trim().length < 2 || generating) return;
-    setGenerating(true);
-    try {
-      const result = await api.generateWalkthrough(courseId, focus.trim(), accessToken);
-      setWalkthrough(result);
-      setStepIndex(0);
-      setSelectedOption(null);
-      setChecked(false);
-      setCompleted(false);
-    } catch (error) {
-      toast.error(error instanceof Error ? error.message : "Could not create the walkthrough.");
-    } finally {
-      setGenerating(false);
-    }
-  };
-
-  const resetStep = (nextIndex: number) => {
-    setStepIndex(nextIndex);
-    setSelectedOption(null);
-    setChecked(false);
-  };
-
-  if (!walkthrough) return <div className="p-6 lg:p-8 max-w-3xl mx-auto">
-    <div className="bg-card border border-border rounded-2xl p-8 shadow-sm">
-      <div className="w-12 h-12 rounded-xl bg-violet-100 text-violet-700 flex items-center justify-center mb-5"><Layers size={22} /></div>
-      <h1 className="font-display text-2xl text-foreground">Course-Grounded Concept Lab</h1>
-      <p className="text-sm text-muted-foreground mt-2 leading-relaxed max-w-xl">Choose a concept from {courseName}. EduBridge will create a short cited walkthrough with scenarios and reasoning checkpoints.</p>
-      <div className="mt-6 flex flex-col sm:flex-row gap-3">
-        <input value={focus} onChange={event => setFocus(event.target.value)} onKeyDown={event => { if (event.key === "Enter") void generate(); }} maxLength={240} placeholder="e.g. self-attention compared with recurrence" className="flex-1 rounded-xl border border-border bg-background px-4 py-3 text-sm text-foreground focus:outline-none focus:ring-2 focus:ring-ring" />
-        <button onClick={() => void generate()} disabled={focus.trim().length < 2 || generating} className="rounded-xl bg-primary text-primary-foreground px-5 py-3 text-sm font-semibold disabled:opacity-40 inline-flex items-center justify-center gap-2">{generating ? <><RefreshCw size={14} className="animate-spin" />Building lab…</> : <><Sparkles size={14} />Generate walkthrough</>}</button>
-      </div>
-      <div className="mt-4 rounded-xl border border-border bg-muted/40 p-4 grid sm:grid-cols-3 gap-3 text-xs text-muted-foreground">
-        <div><span className="font-semibold text-foreground">Grounded</span><br />Every step links to a page or slide.</div>
-        <div><span className="font-semibold text-foreground">Interactive</span><br />Reason through one checkpoint at a time.</div>
-        <div><span className="font-semibold text-foreground">Cost-aware</span><br />Only generation uses tokens; replay is free.</div>
-      </div>
-    </div>
-  </div>;
-
-  if (completed) return <div className="p-6 lg:p-8 max-w-3xl mx-auto">
-    <div className="bg-card border border-border rounded-2xl p-8 shadow-sm text-center">
-      <div className="w-14 h-14 rounded-2xl bg-emerald-100 text-emerald-700 flex items-center justify-center mx-auto mb-4"><CheckCheck size={26} /></div>
-      <div className="text-xs font-mono uppercase tracking-wide text-muted-foreground mb-2">Walkthrough complete</div>
-      <h1 className="font-display text-2xl text-foreground mb-2">{walkthrough.title}</h1>
-      <div className="text-left rounded-xl border border-violet-200 bg-violet-50 p-5 mt-6"><div className="text-xs font-semibold uppercase tracking-wide text-violet-700 mb-2">Transfer challenge</div><p className="text-sm text-violet-950 leading-relaxed">{walkthrough.closing_challenge}</p></div>
-      <div className="mt-6 flex flex-wrap justify-center gap-3">
-        <button onClick={() => { setCompleted(false); resetStep(0); }} className="rounded-xl border border-border bg-card px-4 py-2.5 text-sm font-semibold text-foreground hover:bg-muted inline-flex items-center gap-2"><RotateCcw size={14} />Replay without tokens</button>
-        <button onClick={() => setWalkthrough(null)} className="rounded-xl bg-primary text-primary-foreground px-4 py-2.5 text-sm font-semibold">Explore another concept</button>
-      </div>
-    </div>
-  </div>;
-
-  const step = walkthrough.steps[stepIndex];
-  const correct = selectedOption === step.checkpoint.correct_option;
-  return <div className="p-6 lg:p-8 max-w-3xl mx-auto">
-    <div className="flex items-start justify-between gap-4 mb-5">
-      <div><div className="text-xs font-mono uppercase tracking-wide text-muted-foreground">{walkthrough.title}</div><h1 className="font-display text-2xl text-foreground mt-1">{step.title}</h1><p className="text-xs text-muted-foreground mt-1">Goal: {walkthrough.learning_goal}</p></div>
-      <button onClick={() => setWalkthrough(null)} className="text-xs font-semibold text-primary hover:underline shrink-0">New lab</button>
-    </div>
-    <div className="flex gap-2 mb-5">{walkthrough.steps.map((item, index) => <div key={`${item.title}-${index}`} className={`h-1.5 rounded-full flex-1 ${index <= stepIndex ? "bg-primary" : "bg-muted"}`} />)}</div>
-    <div className="bg-card border border-border rounded-2xl p-6 shadow-sm">
-      <div className="text-[10px] font-semibold uppercase tracking-wide text-muted-foreground mb-2">Step {stepIndex + 1} of {walkthrough.steps.length}</div>
-      <div className="text-sm text-foreground leading-relaxed">{renderText(step.explanation)}</div>
-      <div className="rounded-xl border border-blue-200 bg-blue-50 p-4 mt-5"><div className="text-[10px] font-semibold uppercase tracking-wide text-blue-700 mb-1.5">Try this scenario</div><p className="text-sm text-blue-950 leading-relaxed">{step.scenario}</p></div>
-      <div className="mt-6"><div className="text-sm font-semibold text-foreground mb-3">{step.checkpoint.question}</div><div className="space-y-2">{step.checkpoint.options.map((option, index) => {
-        const optionCorrect = index === step.checkpoint.correct_option;
-        const selected = selectedOption === index;
-        const stateClass = checked && optionCorrect ? "border-emerald-400 bg-emerald-50" : checked && selected && !optionCorrect ? "border-amber-400 bg-amber-50" : selected ? "border-primary bg-primary/5" : "border-border bg-background hover:bg-muted";
-        return <button key={`${option}-${index}`} onClick={() => { if (!checked) setSelectedOption(index); }} disabled={checked} className={`w-full text-left rounded-xl border px-4 py-3 text-sm transition-colors ${stateClass}`}><span className="font-mono text-xs text-muted-foreground mr-2">{String.fromCharCode(65 + index)}.</span>{option}</button>;
-      })}</div></div>
-      {checked && <div className={`mt-4 rounded-xl border p-4 text-sm ${correct ? "border-emerald-200 bg-emerald-50 text-emerald-900" : "border-amber-200 bg-amber-50 text-amber-900"}`}><div className="font-semibold mb-1">{correct ? "Good reasoning" : "Revisit the distinction"}</div>{correct ? step.checkpoint.correct_feedback : step.checkpoint.revision_feedback}</div>}
-      <div className="mt-5 flex items-center justify-between gap-3">
-        <button onClick={() => resetStep(Math.max(0, stepIndex - 1))} disabled={stepIndex === 0} className="text-sm font-semibold text-muted-foreground disabled:opacity-30">← Previous</button>
-        {!checked ? <button onClick={() => setChecked(true)} disabled={selectedOption === null} className="rounded-xl bg-primary text-primary-foreground px-5 py-2.5 text-sm font-semibold disabled:opacity-40">Check reasoning</button> : <button onClick={() => { if (stepIndex === walkthrough.steps.length - 1) setCompleted(true); else resetStep(stepIndex + 1); }} className="rounded-xl bg-primary text-primary-foreground px-5 py-2.5 text-sm font-semibold">{stepIndex === walkthrough.steps.length - 1 ? "Finish lab" : "Next step →"}</button>}
-      </div>
-      {step.citations.length > 0 && <div className="mt-5 pt-4 border-t border-border"><div className="text-[10px] font-semibold uppercase tracking-wide text-muted-foreground mb-2">Course evidence</div><div className="flex flex-wrap gap-2">{step.citations.map((citation, index) => <span key={`${citation.document_title}-${citation.page_number}-${index}`} className="rounded-lg border border-border bg-muted/40 px-2.5 py-1.5 text-[10px] text-muted-foreground"><span className="font-medium text-foreground">{citation.document_title}</span>{citation.page_number ? ` · ${citation.source_kind === "slide" ? "Slide" : "Page"} ${citation.page_number}` : ""}</span>)}</div></div>}
-    </div>
-    <p className="text-[10px] text-muted-foreground text-center mt-3">Checking answers and moving between steps uses no additional AI tokens.</p>
-  </div>;
-}
-
-const QUIZ_QUESTIONS = [
-  {
-    topic: "Cell Division — Meiosis",
-    question: "Which phase of meiosis is responsible for genetic recombination through crossing over?",
-    options: ["Metaphase I", "Prophase I", "Anaphase II", "Telophase I"],
-    correct: 1,
-    explanation: "Crossing over occurs during **Prophase I**, when homologous chromosomes pair up (synapsis) and exchange DNA segments. This creates new allele combinations and is the primary source of genetic variation in sexual reproduction.",
-  },
-  {
-    topic: "Genetics",
-    question: "In a monohybrid cross between two heterozygous parents (Aa × Aa), what is the expected phenotypic ratio?",
-    options: ["1:1", "3:1", "1:2:1", "2:1"],
-    correct: 1,
-    explanation: "The phenotypic ratio is **3:1** (dominant:recessive). The genotypic ratio is 1 AA : 2 Aa : 1 aa. Since both AA and Aa express the dominant phenotype, 3 out of 4 offspring show the dominant trait.",
-  },
-  {
-    topic: "Cell Biology",
-    question: "Which organelle is known as the powerhouse of the cell and produces ATP via oxidative phosphorylation?",
-    options: ["Ribosome", "Golgi apparatus", "Mitochondria", "Endoplasmic reticulum"],
-    correct: 2,
-    explanation: "The **mitochondria** produce ATP through oxidative phosphorylation in the inner membrane. The cristae (folds) increase surface area for the electron transport chain, which drives ATP synthase.",
-  },
-  {
-    topic: "DNA Replication",
-    question: "DNA replication is described as semi-conservative because:",
-    options: [
-      "It conserves half the original sequence",
-      "Each daughter DNA has one original and one new strand",
-      "Only half of the genome is copied",
-      "It requires two separate polymerases",
-    ],
-    correct: 1,
-    explanation: "**Semi-conservative** means each new double helix retains one original (parental) strand and one newly synthesized strand. This was confirmed by the Meselson-Stahl experiment using nitrogen isotope labeling.",
-  },
-];
 
 // ─── Document Viewer Modal ────────────────────────────────────────────────
 
@@ -4206,7 +4090,7 @@ async function sendPasswordReset(email?: string) {
   if (error) throw error;
 }
 
-function TeacherSettings({ courses, darkMode, setDarkMode }: { courses: TeacherCourse[]; darkMode: boolean; setDarkMode: (v: boolean) => void }) {
+function TeacherSettings({ courses, darkMode, setDarkMode, onShowWorkChange }: { courses: TeacherCourse[]; darkMode: boolean; setDarkMode: (v: boolean) => void; onShowWorkChange: (courseId: string, enabled: boolean) => void }) {
   const { profile: account, user, session, refreshProfile } = useAuth();
   const [editing, setEditing] = useState(false);
   const [saving, setSaving] = useState(false);
@@ -4424,9 +4308,22 @@ function TeacherSettings({ courses, darkMode, setDarkMode }: { courses: TeacherC
 
     <section className="bg-card border border-border rounded-2xl p-6 shadow-sm mb-5">
       <h2 className="font-semibold mb-4">My Courses</h2>
-      <div className="space-y-3">{courses.map(course => <div key={course.id} className="p-4 bg-muted/40 rounded-xl flex justify-between gap-3">
-        <div><div className="text-sm font-medium">{course.name}</div><div className="text-xs text-muted-foreground">{course.subject} · <span className="font-mono">{course.code}</span></div></div>
-        <span className="text-xs text-emerald-700">Active</span>
+      <div className="space-y-3">{courses.map(course => <div key={course.id} className="p-4 bg-muted/40 rounded-xl flex flex-col gap-3">
+        <div className="flex justify-between gap-3">
+          <div><div className="text-sm font-medium">{course.name}</div><div className="text-xs text-muted-foreground">{course.subject} · <span className="font-mono">{course.code}</span></div></div>
+          <span className="text-xs text-emerald-700">Active</span>
+        </div>
+        <div className="flex items-start justify-between gap-4 border-t border-border pt-3">
+          <div>
+            <div id={`show-work-${course.id}`} className="text-sm font-medium">Show Your Work</div>
+            <p className="text-xs text-muted-foreground mt-0.5 max-w-md">Students can upload a photo or PDF of their working for feedback. Useful for problem-solving courses. Flags only reach a student’s record after you approve them.</p>
+          </div>
+          <button type="button" role="switch" aria-checked={course.showWork} aria-labelledby={`show-work-${course.id}`}
+            onClick={() => onShowWorkChange(course.id, !course.showWork)}
+            className={`relative mt-0.5 h-6 w-11 shrink-0 rounded-full transition-colors ${course.showWork ? "bg-primary" : "bg-muted-foreground/30"}`}>
+            <span className={`absolute top-0.5 h-5 w-5 rounded-full bg-white shadow transition-transform ${course.showWork ? "translate-x-[22px]" : "translate-x-0.5"}`} />
+          </button>
+        </div>
       </div>)}{courses.length === 0 && <p className="text-sm text-muted-foreground">You have not created a course yet.</p>}</div>
     </section>
 

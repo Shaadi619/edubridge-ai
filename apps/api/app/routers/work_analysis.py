@@ -126,6 +126,22 @@ async def _teacher_course(client: httpx.AsyncClient, base: str, headers: dict, c
         raise HTTPException(status_code=403, detail="Only the course teacher can review submitted work")
 
 
+SHOW_WORK_OFF = "Show Your Work isn’t turned on for this course. Your teacher can turn it on in Settings."
+
+
+async def _show_work_enabled(client: httpx.AsyncClient, base: str, headers: dict, course_id: str) -> bool:
+    """True only when the course has opted in; a missing column (unapplied migration) means off."""
+    response = await client.get(
+        f"{base}/rest/v1/courses", headers=headers,
+        params={"id": f"eq.{course_id}", "select": "show_work_enabled", "limit": "1"},
+    )
+    if response.status_code == 400:
+        return False
+    response.raise_for_status()
+    rows = response.json()
+    return bool(rows and rows[0].get("show_work_enabled"))
+
+
 @router.post("/{course_id}/work-submissions/analyze")
 async def analyze_work(
     course_id: UUID,
@@ -147,6 +163,8 @@ async def analyze_work(
     async with httpx.AsyncClient(timeout=60) as client:
         if not await _course_access(client, base, headers, course_id_string, user.id):
             raise HTTPException(status_code=403, detail="You are not an approved member of this course")
+        if not await _show_work_enabled(client, base, headers, course_id_string):
+            raise HTTPException(status_code=403, detail=SHOW_WORK_OFF)
         profile = await client.get(
             f"{base}/rest/v1/profiles", headers=headers,
             params={"id": f"eq.{user.id}", "role": "eq.student", "select": "id", "limit": "1"},

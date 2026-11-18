@@ -54,3 +54,30 @@ def test_decode_audio_rejects_mismatched_signature() -> None:
         _decode_audio(request)
 
     assert error.value.status_code == 400
+
+
+# --- Show Your Work is opt-in per course -------------------------------------------
+
+import asyncio as _asyncio
+from unittest.mock import AsyncMock as _AsyncMock
+
+import httpx as _httpx
+
+from app.routers import work_analysis as _work_analysis
+
+
+def _reply(status: int, data) -> _httpx.Response:
+    return _httpx.Response(status, json=data, request=_httpx.Request("GET", "https://example.com"))
+
+
+def test_show_work_is_off_unless_the_course_opts_in() -> None:
+    client = _AsyncMock()
+    for rows, expected in (([{"show_work_enabled": True}], True), ([{"show_work_enabled": False}], False), ([], False)):
+        client.get.return_value = _reply(200, rows)
+        assert _asyncio.run(_work_analysis._show_work_enabled(client, "https://example.com", {}, "course")) is expected
+
+
+def test_show_work_is_off_before_the_migration_is_applied() -> None:
+    client = _AsyncMock()
+    client.get.return_value = _reply(400, {"message": "column courses.show_work_enabled does not exist"})
+    assert _asyncio.run(_work_analysis._show_work_enabled(client, "https://example.com", {}, "course")) is False

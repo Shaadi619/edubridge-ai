@@ -72,25 +72,6 @@ export type WorkSubmission = {
 
 export type ExplanationFormat = "simpler" | "analogy" | "worked_example" | "visual_outline";
 
-export type ConceptWalkthrough = {
-  title: string;
-  learning_goal: string;
-  steps: Array<{
-    title: string;
-    explanation: string;
-    scenario: string;
-    checkpoint: {
-      question: string;
-      options: string[];
-      correct_option: number;
-      correct_feedback: string;
-      revision_feedback: string;
-    };
-    citations: CourseGraphCitation[];
-  }>;
-  closing_challenge: string;
-};
-
 export type TeacherInterventionDraft = {
   rationale: string;
   recommended_action: string;
@@ -294,12 +275,6 @@ export const api = {
     }>(
       `/courses/${courseId}/tutor/explain-format`,
       { method: "POST", signal, body: JSON.stringify({ question, format }) },
-      accessToken,
-    ),
-  generateWalkthrough: (courseId: string, focus: string, accessToken: string) =>
-    request<ConceptWalkthrough>(
-      `/courses/${courseId}/walkthroughs/generate`,
-      { method: "POST", body: JSON.stringify({ focus }) },
       accessToken,
     ),
   generateQuiz: (courseId: string, accessToken: string, focusConcept?: string) =>
@@ -566,7 +541,7 @@ export const api = {
   cancelEnrollment: (id: string, accessToken: string) =>
     request<{ deleted: boolean }>(`/enrollments/${id}`, { method: "DELETE" }, accessToken),
   myCourses: (accessToken: string) =>
-    request<Array<{ id: string; name: string; subject: string; enrollment_code: string; teacher_id: string; teacher: string }>>(
+    request<Array<{ id: string; name: string; subject: string; enrollment_code: string; teacher_id: string; teacher: string; show_work_enabled: boolean }>>(
       "/me/courses", undefined, accessToken,
     ),
 };

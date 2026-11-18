@@ -145,29 +145,6 @@ class ShowWorkAnalysis(BaseModel):
     next_step: str
 
 
-class WalkthroughCheckpoint(BaseModel):
-    question: str
-    options: list[str] = Field(min_length=2, max_length=4)
-    correct_option: int = Field(ge=0, le=3)
-    correct_feedback: str
-    revision_feedback: str
-
-
-class WalkthroughStep(BaseModel):
-    title: str
-    explanation: str
-    scenario: str
-    checkpoint: WalkthroughCheckpoint
-    citations: list[Citation]
-
-
-class WalkthroughResult(BaseModel):
-    title: str
-    learning_goal: str
-    steps: list[WalkthroughStep] = Field(min_length=3, max_length=5)
-    closing_challenge: str
-
-
 class TeacherInterventionDraft(BaseModel):
     rationale: str
     recommended_action: str
