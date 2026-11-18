@@ -14,11 +14,13 @@ from pydantic import BaseModel, Field
 from app.ai.azure_provider import AzureOpenAIProvider
 from app.ai.contracts import (
     AITier, Citation, EvidenceChunk, GroundedExplanationDraft, MisconceptionAnalysis,
-    TutorAnswer, TutorDraft,
+    StandaloneQuestion, TutorAnswer, TutorDraft,
 )
 from app.ai.embeddings import embedding_client
 from app.ai.evidence import course_source_index, course_source_payload, normalize_whitespace, referenced_chunks
-from app.ai.prompts import ALTERNATIVE_EXPLANATION_SYSTEM_PROMPT, TUTOR_SYSTEM_PROMPT
+from app.ai.prompts import (
+    ALTERNATIVE_EXPLANATION_SYSTEM_PROMPT, STANDALONE_QUESTION_PROMPT, TUTOR_SYSTEM_PROMPT,
+)
 from app.auth import AuthenticatedUser, current_user
 from app.concepts import friendly_concept
 from app.config import Settings, get_settings
@@ -44,6 +46,9 @@ UNVERIFIED_DRAFT = (
     "I found related course material, but couldn't link a reliable answer to it. "
     "Try asking about one part of the topic."
 )
+HISTORY_MESSAGES = 6
+HISTORY_MESSAGE_CHARS = 600
+MAX_STANDALONE_CHARS = 400
 
 
 def _source_kind(title: str, page_number: int | None) -> str:
@@ -107,6 +112,58 @@ async def _match_evidence(
     matches = response.json()
     return _select_evidence(matches, minimum_similarity), (
         INSUFFICIENT_EVIDENCE if matches else NO_INDEXED_EVIDENCE
+    )
+
+
+async def _recent_history(
+    client: httpx.AsyncClient, base: str, headers: dict, conversation_id: str,
+) -> list[dict[str, str]]:
+    """Return the conversation's latest messages, oldest first, trimmed for prompts."""
+    response = await client.get(
+        f"{base}/rest/v1/messages", headers=headers,
+        params={
+            "conversation_id": f"eq.{conversation_id}", "select": "author_role,content",
+            "order": "created_at.desc", "limit": str(HISTORY_MESSAGES),
+        },
+    )
+    response.raise_for_status()
+    history = []
+    for row in reversed(response.json()):
+        content = normalize_whitespace(str(row.get("content") or ""))[:HISTORY_MESSAGE_CHARS]
+        if row.get("author_role") in {"student", "assistant"} and content:
+            history.append({"role": row["author_role"], "content": content})
+    return history
+
+
+async def _standalone_question(provider, history: list[dict[str, str]], question: str) -> tuple[str, str]:
+    """Rewrite a follow-up into a standalone question plus a concept-focused search query.
+
+    Falls back to the original question if there is no history or the rewrite fails.
+    """
+    if not history:
+        return question, question
+    try:
+        rewrite = await provider.generate_structured(
+            tier=AITier.FAST, system_prompt=STANDALONE_QUESTION_PROMPT,
+            user_prompt=json.dumps({"recent_conversation": history, "latest_message": question}),
+            output_type=StandaloneQuestion,
+        )
+    except Exception:
+        logger.warning("Tutor follow-up rewrite failed; using the original question", exc_info=True)
+        return question, question
+    standalone = normalize_whitespace(rewrite.question)
+    search_query = normalize_whitespace(rewrite.search_query)
+    if not standalone or len(standalone) > MAX_STANDALONE_CHARS:
+        return question, question
+    if not search_query or len(search_query) > MAX_STANDALONE_CHARS:
+        search_query = standalone
+    return standalone, search_query
+
+
+def _follow_up_decline(standalone: str) -> str:
+    return (
+        f"I read your question as: \"{standalone}\" but couldn't find enough support for it in the "
+        "course materials. If I misread it, try naming the concept or lecture you mean."
     )
 
 
@@ -365,6 +422,14 @@ async def tutor(
             conversation.raise_for_status()
             if not conversation.json():
                 raise HTTPException(status_code=404, detail="Conversation not found")
+        provider = AzureOpenAIProvider(
+            endpoint=settings.azure_openai_endpoint, api_key=settings.azure_openai_api_key,
+            api_version=settings.azure_openai_api_version,
+            fast_deployment=settings.azure_openai_tier1_deployment,
+            reasoning_deployment="",
+        )
+        history: list[dict[str, str]] = []
+        standalone = request.question
         summary_payload = ""
         if summary_request is not None:
             embedded_at = perf_counter()
@@ -382,22 +447,21 @@ async def tutor(
             if not configured:
                 raise HTTPException(status_code=503, detail="Semantic retrieval is not configured")
             embedding_api, embedding_model = configured
+            if conversation_id:
+                history = await _recent_history(client, base, headers, conversation_id)
+            standalone, search_query = await _standalone_question(provider, history, request.question)
             query_vector = (await embedding_api.embeddings.create(
-                model=embedding_model, input=request.question, encoding_format="float"
+                model=embedding_model, input=search_query, encoding_format="float"
             )).data[0].embedding
             embedded_at = perf_counter()
             evidence, reason = await _match_evidence(
                 client, base, headers, course_id_string, query_vector, settings.tutor_min_similarity,
             )
+            if not evidence and reason == INSUFFICIENT_EVIDENCE and standalone != request.question:
+                reason = _follow_up_decline(standalone)
         retrieved_at = perf_counter()
         source_index = course_source_index(evidence)
         if evidence:
-            provider = AzureOpenAIProvider(
-                endpoint=settings.azure_openai_endpoint, api_key=settings.azure_openai_api_key,
-                api_version=settings.azure_openai_api_version,
-                fast_deployment=settings.azure_openai_tier1_deployment,
-                reasoning_deployment="",
-            )
             model_tier = AITier.FAST
         if evidence and summary_payload:
             summary = await provider.generate_structured(
@@ -419,10 +483,12 @@ async def tutor(
                     misconception=MisconceptionAnalysis(detected=False, confidence=0),
                 )
         elif evidence:
-            user_prompt = json.dumps({
-                "student_question": request.question,
-                "course_evidence": course_source_payload(source_index),
-            })
+            prompt_input = {"student_question": request.question}
+            if history:
+                prompt_input["recent_conversation"] = history
+                prompt_input["resolved_question"] = standalone
+            prompt_input["course_evidence"] = course_source_payload(source_index)
+            user_prompt = json.dumps(prompt_input)
             draft = await provider.generate_structured(
                 tier=AITier.FAST, system_prompt=TUTOR_SYSTEM_PROMPT, user_prompt=user_prompt,
                 output_type=TutorDraft,
@@ -478,9 +544,11 @@ async def tutor(
                 logger.exception("Misconception persistence failed for course=%s user=%s", course_id_string, user.id)
         finished = perf_counter()
         logger.info(
-            "Tutor latency request_id=%s outcome=%s candidates_used=%d embed_ms=%d retrieve_ms=%d generate_ms=%d persist_ms=%d total_ms=%d",
+            "Tutor latency request_id=%s outcome=%s follow_up=%s rewritten=%s candidates_used=%d embed_ms=%d retrieve_ms=%d generate_ms=%d persist_ms=%d total_ms=%d",
             request_id,
             outcome,
+            bool(history),
+            standalone != request.question,
             len(evidence),
             round((embedded_at - started) * 1000),
             round((retrieved_at - embedded_at) * 1000),

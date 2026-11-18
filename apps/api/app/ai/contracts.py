@@ -81,6 +81,11 @@ class GroundedExplanationDraft(BaseModel):
     sections: list[GroundedExplanationSection]
 
 
+class StandaloneQuestion(BaseModel):
+    question: str
+    search_query: str
+
+
 class TutorDraft(GroundedExplanationDraft):
     misconception: MisconceptionAnalysis
     misconception_source_refs: list[str]
