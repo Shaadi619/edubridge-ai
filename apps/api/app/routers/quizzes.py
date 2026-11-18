@@ -35,6 +35,7 @@ class QuizCitation(BaseModel):
     document_title: str
     page_number: int | None
     source_kind: str
+    quote: str | None = None
 
 
 class GeneratedQuestion(BaseModel):
@@ -1201,6 +1202,7 @@ async def generate_quiz(
                 chunk_id=c.chunk_id,
                 document_title=c.document_title, page_number=c.page_number,
                 source_kind=_source_kind(c.document_title, c.page_number),
+                quote=question._evidence_quotes.get(c.chunk_id),
             ) for c in question.citations],
         ) for row, question in zip(stored, result.questions, strict=True)])
 

@@ -24,11 +24,12 @@ import { api, ApiError, type CourseGraphSuggestion, type ExplanationFormat, type
 import type { AiMessage, Announcement, ChatMessage, HistoryStatus, StudentCourse } from "./student/chatTypes";
 import { renderText } from "./student/renderText";
 import { useScopedQuery, useScopedRequest } from "./useScopedRequest";
-import { clearStudentSession, readQuizDraft, readStudentLocation, writeQuizDraft, writeStudentLocation } from "../lib/studentSession";
+import { clearStudentSession, readStudentLocation, writeStudentLocation } from "../lib/studentSession";
 
 const CitationPreview = lazy(() => import("./components/CitationPreview"));
 const AskWorkspace = lazy(() => import("./student/AskWorkspace"));
 const TodayStage = lazy(() => import("./teacher/TodayStage"));
+const QuizStage = lazy(() => import("./student/QuizStage"));
 
 // ─── Types ────────────────────────────────────────────────────────────────
 
@@ -3528,7 +3529,7 @@ function StudentDashboard({ onLogout, darkMode, setDarkMode }: { onLogout: () =>
         items={navItems} activeTab={tab} setTab={setTab} onLogout={onLogout} open={sidebarOpen} setOpen={setSidebarOpen}
         extra={courseExtra} />
       <div className="flex-1 min-w-0 lg:ml-64 flex flex-col min-h-screen">
-        <header className={`sticky top-0 z-20 backdrop-blur-sm border-b h-14 flex items-center px-6 gap-4 ${tab === "workspace" ? "eb-stage-header" : "bg-background/95 border-border"}`}>
+        <header className={`sticky top-0 z-20 backdrop-blur-sm border-b h-14 flex items-center px-6 gap-4 ${tab === "workspace" || tab === "quiz" ? "eb-stage-header" : "bg-background/95 border-border"}`}>
           <button className="lg:hidden" aria-label="Open menu" onClick={() => setSidebarOpen(true)}><Menu size={20} /></button>
           <h1 className="font-semibold text-foreground text-sm">
             {tab === "workspace" && `Course Q&A${selectedCourse ? ` — ${selectedCourse.name}` : ""}`}
@@ -3556,9 +3557,11 @@ function StudentDashboard({ onLogout, darkMode, setDarkMode }: { onLogout: () =>
         </header>
         <main className="flex-1">
           {selectedCourse && session && <div hidden={tab !== "quiz"}>
-            <StudentQuiz key={courseScope} userId={session.user.id} courseId={selectedCourse.id}
-              accessToken={session.access_token} onViewProgress={() => setTab("progress")} suggestedFocus={practiceConcept}
-              onFocusConsumed={() => setPracticeConcept(null)} darkMode={darkMode} />
+            <Suspense fallback={<div role="status" className="eb-stage min-h-[calc(100vh-3.5rem)] p-10 text-sm text-[#A9B6C2]">Opening quiz…</div>}>
+              <QuizStage key={courseScope} userId={session.user.id} courseId={selectedCourse.id} courseName={selectedCourse.name}
+                accessToken={session.access_token} onViewProgress={() => setTab("progress")} suggestedFocus={practiceConcept}
+                onFocusConsumed={() => setPracticeConcept(null)} />
+            </Suspense>
           </div>}
           <div hidden={tab === "quiz" && Boolean(selectedCourse && session)}>
           <AnimatePresence mode="wait" initial={false}>
@@ -3816,349 +3819,6 @@ const QUIZ_QUESTIONS = [
     explanation: "**Semi-conservative** means each new double helix retains one original (parental) strand and one newly synthesized strand. This was confirmed by the Meselson-Stahl experiment using nitrogen isotope labeling.",
   },
 ];
-
-function StudentQuiz({ userId, courseId, accessToken, onViewProgress, suggestedFocus, onFocusConsumed, darkMode }: {
-  userId: string; courseId: string; accessToken: string;
-  onViewProgress: () => void;
-  suggestedFocus: string | null;
-  onFocusConsumed: () => void;
-  darkMode: boolean;
-}) {
-  type GeneratedQuiz = Awaited<ReturnType<typeof api.generateQuiz>>;
-  const [initialDraft] = useState(() => readQuizDraft(userId, courseId));
-  const [quiz, setQuiz] = useState<GeneratedQuiz | null>(initialDraft?.quiz ?? null);
-  const [loading, setLoading] = useState(false);
-  const [loadError, setLoadError] = useState<string | null>(null);
-  const generationInFlight = useRef(false);
-  const [questionIndex, setQuestionIndex] = useState(initialDraft?.questionIndex ?? 0);
-  const [answers, setAnswers] = useState<(number | null)[]>(initialDraft?.answers ?? []);
-  const [confidences, setConfidences] = useState<(number | null)[]>(initialDraft?.confidences ?? []);
-  const [selectedAnswer, setSelectedAnswer] = useState<number | null>(initialDraft?.selectedAnswer ?? null);
-  const [selectedConfidence, setSelectedConfidence] = useState<number | null>(initialDraft?.selectedConfidence ?? null);
-  const [showExplanation, setShowExplanation] = useState(initialDraft?.showExplanation ?? false);
-  const [showResults, setShowResults] = useState(initialDraft?.showResults ?? false);
-  const [practiceTopic, setPracticeTopic] = useState<string | null>(null);
-  const [savingAttempt, setSavingAttempt] = useState(false);
-  const [replaceQuiz, setReplaceQuiz] = useState(false);
-  const submissionInFlight = useRef(false);
-
-  const loadQuiz = async (focusConcept?: string) => {
-    if (generationInFlight.current) return;
-    generationInFlight.current = true;
-    setLoading(true);
-    setLoadError(null);
-    try {
-      const generated = await api.generateQuiz(courseId, accessToken, focusConcept);
-      setQuiz(generated);
-      setAnswers(Array(generated.questions.length).fill(null));
-      setConfidences(Array(generated.questions.length).fill(null));
-      setSelectedConfidence(null);
-      setQuestionIndex(0);
-      setSelectedAnswer(null);
-      setShowExplanation(false);
-      setShowResults(false);
-      setPracticeTopic(null);
-      setReplaceQuiz(false);
-      if (focusConcept) onFocusConsumed();
-    } catch (error) {
-      setLoadError(error instanceof Error ? error.message : "Could not generate a quiz.");
-    } finally {
-      generationInFlight.current = false;
-      setLoading(false);
-    }
-  };
-
-  useLayoutEffect(() => {
-    if (!quiz) return;
-    writeQuizDraft(userId, courseId, {
-      quiz, questionIndex, answers, confidences, selectedAnswer, selectedConfidence, showExplanation, showResults,
-    });
-  }, [userId, courseId, quiz, questionIndex, answers, confidences, selectedAnswer, selectedConfidence, showExplanation, showResults]);
-
-  if (loading) return <div className="p-8 max-w-2xl mx-auto"><div role="status" className="bg-card border border-border rounded-xl p-6 flex items-center gap-3"><TypingIndicator /><span className="text-sm text-muted-foreground">Generating a quiz from your course materials…</span></div></div>;
-  if (!quiz) return (
-    <div className="p-6 lg:p-8 max-w-2xl mx-auto">
-      <div className="bg-card border border-border rounded-2xl p-8 text-center shadow-sm">
-        <div className="w-12 h-12 rounded-xl bg-primary/10 text-primary flex items-center justify-center mx-auto mb-4"><Target size={22} /></div>
-        <h2 className="font-display text-2xl text-foreground mb-2">Course-grounded quiz</h2>
-        <p className="text-sm text-muted-foreground font-light leading-relaxed max-w-md mx-auto mb-6">
-          {suggestedFocus ? <>Generate up to four questions focused on <span className="font-semibold text-foreground">{suggestedFocus}</span> from this course’s uploaded materials.</> : "Generate up to four questions from this course’s uploaded materials. Your quiz stays open when you switch sections."}
-        </p>
-        {loadError && <div className="bg-red-50 border border-red-200 rounded-lg px-4 py-3 text-sm text-red-800 mb-4">{loadError}</div>}
-        <motion.button whileHover={{ scale: 1.01 }} whileTap={{ scale: 0.98 }} onClick={() => void loadQuiz(suggestedFocus ?? undefined)}
-          className="bg-primary text-primary-foreground px-6 py-3 rounded-xl font-medium shadow-sm inline-flex items-center gap-2">
-          <Sparkles size={15} />{loadError ? "Try Again" : suggestedFocus ? "Generate Targeted Practice" : "Generate Quiz"}
-        </motion.button>
-        <p className="text-[11px] text-muted-foreground mt-3">This action uses AI tokens.</p>
-      </div>
-    </div>
-  );
-
-  const quizQuestions = quiz.questions.map(question => ({
-    id: question.id,
-    topic: question.concept,
-    question: question.prompt,
-    options: question.options,
-    correct: question.correct_option,
-    explanation: question.explanation,
-    citations: question.citations,
-  }));
-
-  const q = quizQuestions[questionIndex];
-  const isLastQuestion = questionIndex === quizQuestions.length - 1;
-  const isCorrect = selectedAnswer === q.correct;
-  const correctCount = answers.filter((a, i) => a === quizQuestions[i].correct).length;
-  const pct = Math.round((correctCount / quizQuestions.length) * 100);
-
-  const handleNext = async () => {
-    if (submissionInFlight.current) return;
-    const newAnswers = [...answers];
-    newAnswers[questionIndex] = selectedAnswer;
-    setAnswers(newAnswers);
-    const newConfidences = [...confidences];
-    newConfidences[questionIndex] = selectedConfidence;
-    setConfidences(newConfidences);
-    if (isLastQuestion) {
-      submissionInFlight.current = true;
-      setSavingAttempt(true);
-      try {
-        await api.submitQuiz(courseId, quiz.id, newAnswers, newConfidences, accessToken);
-        setShowResults(true);
-      } catch (error) {
-        toast.error(error instanceof Error ? error.message : "Quiz score could not be saved.");
-      } finally {
-        submissionInFlight.current = false;
-        setSavingAttempt(false);
-      }
-    } else {
-      setQuestionIndex(i => i + 1);
-      setSelectedAnswer(null);
-      setSelectedConfidence(null);
-      setShowExplanation(false);
-    }
-  };
-
-  const retake = () => { void loadQuiz(); };
-
-  if (showResults) {
-    const wrongTopics = quizQuestions.filter((_, i) => answers[i] !== quizQuestions[i].correct).map(q => q.topic);
-    return (
-      <div className="p-6 lg:p-8 max-w-2xl mx-auto">
-        {loadError && <p role="alert" className="mb-4 rounded-lg border border-red-200 bg-red-50 px-4 py-3 text-sm text-red-800">{loadError}</p>}
-        {/* Score hero */}
-        <div className={`rounded-2xl p-6 text-center mb-6 border ${pct >= 75 ? "bg-emerald-50 border-emerald-200" : pct >= 50 ? "bg-amber-50 border-amber-200" : "bg-red-50 border-red-200"}`}>
-          <div className={`font-display text-6xl mb-1 ${pct >= 75 ? "text-emerald-600" : pct >= 50 ? "text-amber-600" : "text-red-600"}`}>{pct}%</div>
-          <div className="font-semibold text-foreground mb-1">
-            {pct >= 75 ? "Great work!" : pct >= 50 ? "Good effort" : "Keep practicing"}
-          </div>
-          <div className="text-sm text-muted-foreground font-light">
-            {correctCount} correct out of {quizQuestions.length} questions
-          </div>
-          {/* Progress dots */}
-          <div className="flex gap-2 justify-center mt-4">
-            {quizQuestions.map((_, i) => (
-              <div key={i} className={`w-8 h-8 rounded-full flex items-center justify-center text-xs font-bold ${
-                answers[i] === quizQuestions[i].correct ? "bg-emerald-500 text-white" : "bg-red-400 text-white"
-              }`}>
-                {answers[i] === quizQuestions[i].correct ? "✓" : "✗"}
-              </div>
-            ))}
-          </div>
-        </div>
-
-        {/* Question breakdown */}
-        <div className="bg-card border border-border rounded-2xl p-5 shadow-sm mb-5">
-          <h3 className="font-semibold text-foreground mb-4">Question Breakdown</h3>
-          <div className="space-y-3">
-            {quizQuestions.map((qq, i) => {
-              const correct = answers[i] === qq.correct;
-              return (
-                <div key={i} className={`flex items-start gap-3 p-3 rounded-xl ${correct ? "bg-emerald-50" : "bg-red-50"}`}>
-                  <div className={`w-6 h-6 rounded-full flex items-center justify-center shrink-0 mt-0.5 ${correct ? "bg-emerald-500" : "bg-red-400"} text-white`}>
-                    {correct ? <CheckCircle size={13} /> : <X size={13} />}
-                  </div>
-                  <div className="flex-1 min-w-0">
-                    <div className="text-xs font-mono text-muted-foreground mb-0.5">{qq.topic}</div>
-                    <div className="text-sm text-foreground font-medium leading-snug">{qq.question}</div>
-                    {!correct && (
-                      <div className="text-xs text-muted-foreground mt-1 font-light">
-                        Correct: <span className="font-semibold text-foreground">{qq.options[qq.correct]}</span>
-                      </div>
-                    )}
-                    {!correct && confidences[i] === 3 && (
-                      <div className="inline-flex items-center gap-1 text-[10px] font-semibold text-amber-800 bg-amber-100 rounded-full px-2 py-0.5 mt-2">
-                        <AlertCircle size={10} />Confidence gap — review your reasoning
-                      </div>
-                    )}
-                  </div>
-                </div>
-              );
-            })}
-          </div>
-        </div>
-
-        {/* Weak areas */}
-        {wrongTopics.length > 0 && (
-          <div className="bg-card border border-border rounded-2xl p-5 shadow-sm mb-5">
-            <h3 className="font-semibold text-foreground mb-1">Areas to Review</h3>
-            <p className="text-xs text-muted-foreground font-light mb-4">Focus your next study session on these topics.</p>
-            <div className="space-y-2">
-              {[...new Set(wrongTopics)].map(topic => (
-                <div key={topic} className="flex items-center justify-between p-3 bg-amber-50 border border-amber-200 rounded-xl">
-                  <div className="flex items-center gap-2.5">
-                    <AlertCircle size={14} className="text-amber-500 shrink-0" />
-                    <span className="text-sm font-medium text-foreground">{topic}</span>
-                  </div>
-                  <button onClick={() => setPracticeTopic(topic)} className="text-xs font-semibold text-primary hover:underline flex items-center gap-1">
-                    Practice <ChevronRight size={11} />
-                  </button>
-                </div>
-              ))}
-            </div>
-            {practiceTopic && <div className="mt-4 rounded-xl border border-amber-200 bg-amber-50 p-4">
-              <div className="text-sm font-semibold text-amber-900">Generate targeted practice for {practiceTopic}?</div>
-              <p className="text-xs text-amber-800 mt-1">This creates four new AI questions and uses AI tokens.</p>
-              <div className="flex gap-2 mt-3">
-                <button onClick={() => setPracticeTopic(null)} className="px-3 py-2 rounded-lg border border-amber-300 text-xs font-medium text-amber-900">Cancel</button>
-                <button onClick={() => void loadQuiz(practiceTopic)} className="px-3 py-2 rounded-lg bg-primary text-primary-foreground text-xs font-semibold flex items-center gap-1.5"><Sparkles size={12} />Generate practice</button>
-              </div>
-            </div>}
-          </div>
-        )}
-
-        <div className="flex gap-3">
-          <motion.button whileHover={{ scale: 1.01 }} whileTap={{ scale: 0.98 }}
-            onClick={retake}
-            className="flex-1 border border-border text-foreground py-3 rounded-xl font-medium hover:bg-muted transition-colors text-sm flex items-center justify-center gap-2">
-            <RotateCcw size={14} />Start new quiz
-          </motion.button>
-          <motion.button whileHover={{ scale: 1.01 }} whileTap={{ scale: 0.98 }} onClick={onViewProgress}
-            className="flex-1 bg-primary text-primary-foreground py-3 rounded-xl font-medium shadow-sm text-sm flex items-center justify-center gap-2">
-            <TrendingUp size={14} />View Progress
-          </motion.button>
-        </div>
-      </div>
-    );
-  }
-
-  return (
-    <div className="p-6 lg:p-8 max-w-2xl mx-auto">
-      <div className="mb-4 flex justify-end">
-        <button type="button" disabled={savingAttempt} onClick={() => setReplaceQuiz(open => !open)}
-          aria-expanded={replaceQuiz} className="rounded-lg border border-border px-3 py-1.5 text-xs font-medium text-foreground hover:bg-muted disabled:opacity-50">
-          {suggestedFocus ? "Start targeted quiz" : "Start new quiz"}
-        </button>
-      </div>
-      {replaceQuiz && <div className="mb-4 rounded-xl border border-border bg-card p-4 text-sm">
-        <p>Starting a new quiz will replace your unfinished quiz once the new questions are ready.</p>
-        <div className="mt-3 flex flex-wrap gap-2">
-          <button type="button" onClick={() => setReplaceQuiz(false)} className="rounded-lg border border-border px-3 py-1.5 font-medium hover:bg-muted">Keep current quiz</button>
-          <button type="button" onClick={() => void loadQuiz(suggestedFocus ?? undefined)} className="rounded-lg bg-primary px-3 py-1.5 font-medium text-primary-foreground hover:opacity-90">Generate new quiz</button>
-        </div>
-      </div>}
-      {loadError && <p role="alert" className="mb-4 rounded-lg border border-red-200 bg-red-50 px-4 py-3 text-sm text-red-800">{loadError}</p>}
-      {quiz.prerequisite_concepts.length > 0 && quiz.focus_concept && <div className="rounded-xl border border-emerald-200 bg-emerald-50 px-4 py-3 mb-5">
-        <div className="text-xs font-semibold text-emerald-900 mb-1">Prerequisite-aware practice</div>
-        <div className="text-xs text-emerald-800 flex flex-wrap items-center gap-1.5">
-          {[...quiz.prerequisite_concepts, quiz.focus_concept].map((concept, index, path) => <span key={`${concept}-${index}`} className="inline-flex items-center gap-1.5"><span className="font-medium">{concept}</span>{index < path.length - 1 && <ArrowRight size={11} />}</span>)}
-        </div>
-        <p className="text-[11px] text-emerald-800/80 mt-1.5">The quiz checks the earliest required concept before moving to the target concept.</p>
-      </div>}
-      <div className="flex items-center justify-between mb-7">
-        <div className="text-sm text-muted-foreground font-light">
-          Question <span className="font-semibold text-foreground font-mono">{questionIndex + 1}</span> of <span className="font-mono">{quizQuestions.length}</span>
-        </div>
-        <div className="flex items-center gap-3">
-          <span className="text-[10px] font-semibold uppercase tracking-wide rounded-full border border-border bg-muted px-2 py-1 text-muted-foreground">{quiz.difficulty_mode}</span>
-          <div className="flex gap-1">
-          {quizQuestions.map((_, i) => (
-            <div key={i} className={`h-1.5 w-7 rounded-full transition-colors ${i < questionIndex ? "bg-emerald-500" : i === questionIndex ? "bg-primary" : "bg-muted"}`} />
-          ))}
-          </div>
-        </div>
-      </div>
-      <div className="bg-card border border-border rounded-xl p-6 mb-5 shadow-sm">
-        <div className="flex items-center gap-2 text-xs text-muted-foreground font-mono uppercase tracking-wide mb-4">
-          <Target size={12} className="shrink-0" />{q.topic}
-        </div>
-        <p className="text-foreground font-medium leading-relaxed">{q.question}</p>
-      </div>
-      <div className="space-y-3 mb-6">
-        {q.options.map((option, i) => {
-          const isSelected = selectedAnswer === i;
-          const isRight = showExplanation && i === q.correct;
-          const isWrong = showExplanation && isSelected && !isCorrect;
-          return (
-            <motion.button key={i} whileTap={!showExplanation ? { scale: 0.98 } : {}}
-              onClick={() => { if (!showExplanation) setSelectedAnswer(i); }}
-              aria-pressed={isSelected}
-              className={`w-full text-left px-4 py-3.5 rounded-xl border text-sm font-medium transition-all shadow-sm ${
-                isRight ? "border-emerald-400 bg-emerald-50 text-emerald-800" :
-                isWrong ? "border-red-300 bg-red-50 text-red-800" :
-                isSelected ? "border-primary bg-primary/5 text-primary" :
-                "border-border bg-card text-foreground hover:border-primary/40 hover:bg-muted/40"
-              }`}
-            >
-              <span className="flex items-center gap-3">
-                <span className="font-mono text-xs shrink-0 tabular-nums">{String.fromCharCode(65 + i)}.</span>
-                <span className="flex-1">{option}</span>
-                <AnimatePresence>
-                  {isRight && <motion.span key="check" initial={{ scale: 0 }} animate={{ scale: 1 }} transition={{ type: "spring", bounce: 0.4 }}><CheckCircle size={15} className="text-emerald-600 shrink-0" /></motion.span>}
-                  {isWrong && <motion.span key="x" initial={{ scale: 0 }} animate={{ scale: 1 }}><X size={15} className="text-red-500 shrink-0" /></motion.span>}
-                </AnimatePresence>
-              </span>
-            </motion.button>
-          );
-        })}
-      </div>
-      {selectedAnswer !== null && !showExplanation && (
-        <div className="bg-card border border-border rounded-xl p-4 mb-4 shadow-sm">
-          <div className="text-sm font-semibold text-foreground mb-1">How confident are you?</div>
-          <p className="text-xs text-muted-foreground mb-3">Choose before seeing the answer. This helps distinguish a guess from a stable misunderstanding.</p>
-          <div className="grid grid-cols-3 gap-2">
-            {[{ value: 1, label: "Not sure" }, { value: 2, label: "Somewhat sure" }, { value: 3, label: "Very sure" }].map(option => (
-              <button key={option.value} onClick={() => setSelectedConfidence(option.value)} aria-pressed={selectedConfidence === option.value}
-                className={`rounded-lg border px-3 py-2 text-xs font-medium transition-colors ${selectedConfidence === option.value ? "bg-primary text-primary-foreground border-primary" : "bg-background text-foreground border-border hover:bg-muted"}`}>
-                {option.label}
-              </button>
-            ))}
-          </div>
-        </div>
-      )}
-      <AnimatePresence mode="wait">
-        {selectedAnswer !== null && !showExplanation && (
-          <motion.button key="check" initial={{ opacity: 1 }} exit={{ opacity: 0 }}
-            whileHover={{ scale: 1.01 }} whileTap={{ scale: 0.98 }}
-            disabled={selectedConfidence === null}
-            onClick={() => setShowExplanation(true)}
-            className="w-full bg-primary text-primary-foreground py-3 rounded-xl font-medium shadow-sm disabled:opacity-40"
-          >Check Answer</motion.button>
-        )}
-        {showExplanation && (
-          <motion.div key="result" initial={{ opacity: 1 }}>
-            <div className={`rounded-xl p-5 mb-4 border text-sm leading-relaxed shadow-sm ${isCorrect ? "bg-emerald-50 border-emerald-200 text-emerald-800" : "bg-red-50 border-red-200 text-red-800"}`}>
-              <div className="font-semibold mb-2 flex items-center gap-2">
-                {isCorrect ? <><CheckCircle size={16} className="text-emerald-600" />Correct!</> : <><X size={16} className="text-red-500" />Not quite.</>}
-              </div>
-              <div>{renderText(q.explanation)}</div>
-              {q.citations.length > 0 && (
-                <div className="mt-3 grid gap-1.5 border-t border-current/15 pt-3">
-                  <span className="text-xs font-semibold">Review the course source</span>
-                  <CourseCitationList courseId={courseId} citations={q.citations} darkMode={darkMode} />
-                </div>
-              )}
-            </div>
-            <motion.button whileHover={{ scale: 1.01 }} whileTap={{ scale: 0.98 }}
-              onClick={() => void handleNext()}
-              disabled={savingAttempt}
-              className="w-full border border-border text-foreground py-3 rounded-xl font-medium hover:bg-muted transition-colors text-sm shadow-sm disabled:opacity-50 flex items-center justify-center gap-2"
-            >{savingAttempt && <RefreshCw size={14} className="animate-spin" />}{savingAttempt ? "Saving attempt…" : isLastQuestion ? "See Results →" : "Next Question →"}</motion.button>
-          </motion.div>
-        )}
-      </AnimatePresence>
-    </div>
-  );
-}
 
 function StudentProgress({ courseId, courseName, accessToken, onGoQuiz, onPractice }: { courseId: string; courseName: string; accessToken: string; onGoQuiz: () => void; onPractice: (concept: string) => void }) {
   type ProgressData = Awaited<ReturnType<typeof api.courseProgress>>;

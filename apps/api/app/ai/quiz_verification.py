@@ -182,10 +182,18 @@ async def generate_verified_quiz(
                 for source in quoted_chunks(verdict.sources, sources)[:2]
             ]
             if citations:
-                accepted[index] = question.model_copy(update={
+                cited = {citation.chunk_id for citation in citations}
+                quotes: dict[str, str] = {}
+                for reference in verdict.sources:
+                    quote = normalize_whitespace(reference.quote)
+                    if reference.chunk_id in cited and reference.chunk_id not in quotes and quote:
+                        quotes[reference.chunk_id] = quote
+                verified = question.model_copy(update={
                     "explanation": verdict.explanation.strip(),
                     "citations": citations,
                 })
+                verified._evidence_quotes = quotes
+                accepted[index] = verified
             else:
                 rejected["quote_mismatch"] += 1
         logger.info("Quiz pass %d verified %d/%d total (drafts=%d candidates=%d verdicts=%d rejected=%s)",

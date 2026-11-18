@@ -238,3 +238,16 @@ def test_shuffle_keeps_correct_text_and_citations_when_original_key_varies() -> 
         assert shuffled.options[shuffled.correct_option] == correct
         assert correct in shuffled.explanation and "Option 1" not in shuffled.explanation
         assert shuffled.citations == original.citations
+
+
+def test_verified_quote_survives_shuffle_and_is_not_in_the_model_schema() -> None:
+    provider = SimpleNamespace(generate_structured=AsyncMock(side_effect=[
+        QuizResult(title="Plant quiz", questions=[draft_question("What do plants release?")]),
+        QuizVerificationResult(questions=[verified_item(0)]),
+    ]))
+
+    result = shuffle_verified_quiz(generate(provider, count=1))
+
+    assert result.questions[0]._evidence_quotes == {SOURCE.chunk_id: "Plants release oxygen during photosynthesis."}
+    assert "_evidence_quotes" not in json.dumps(QuizResult.model_json_schema())
+    assert "_evidence_quotes" not in result.model_dump_json()

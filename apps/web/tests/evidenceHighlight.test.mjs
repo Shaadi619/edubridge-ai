@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import test from "node:test";
-import { highlightEvidence, splitSentences } from "../src/lib/evidenceHighlight.ts";
+import { highlightEvidence, highlightQuote, splitSentences } from "../src/lib/evidenceHighlight.ts";
 
 const SLIDE = "Sequence models read one token at a time. The Transformer is the core engine behind modern AI. "
   + "It was introduced for machine translation. Attention weighs every token against every other token.";
@@ -61,4 +61,19 @@ test("splits long merged slide runs before a capitalised word", () => {
     "Self-Attention allows each word to look at all words in the sentence at the same time, while focusing on the relevant ones",
   ]);
   assert.deepEqual(splitSentences("Short line About Names stays whole"), ["Short line About Names stays whole"]);
+});
+
+test("lights an exact verified quote, ignoring line breaks", () => {
+  const spans = highlightQuote("Plants take in light.\nPlants release oxygen\n during photosynthesis. Roots absorb water.",
+    "Plants release oxygen during photosynthesis.", "");
+  assert.deepEqual(spans, [
+    { text: "Plants take in light.", lit: false },
+    { text: "Plants release oxygen during photosynthesis.", lit: true },
+    { text: "Roots absorb water.", lit: false },
+  ]);
+});
+
+test("falls back to word overlap when the quote is missing", () => {
+  const spans = highlightQuote(SLIDE, null, "the core engine behind modern AI transformer");
+  assert.ok(spans.some(span => span.lit && span.text.includes("core engine")));
 });

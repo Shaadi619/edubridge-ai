@@ -1,7 +1,7 @@
 from enum import StrEnum
 from typing import Literal
 
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, PrivateAttr
 
 
 class AITier(StrEnum):
@@ -59,6 +59,9 @@ class QuizQuestion(BaseModel):
     concept: str
     difficulty: int = Field(ge=1, le=5)
     citations: list[Citation]
+    # Verified quote per cited chunk. Private, so it never enters the schema the
+    # model is asked to fill; the verifier sets it after matching each quote.
+    _evidence_quotes: dict[str, str] = PrivateAttr(default_factory=dict)
 
 
 class QuizResult(BaseModel):

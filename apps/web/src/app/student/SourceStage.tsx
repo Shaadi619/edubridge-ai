@@ -8,7 +8,7 @@ import {
   loadCitationExcerpt,
   type CitationExcerpt,
 } from "../../lib/citations";
-import { highlightEvidence } from "../../lib/evidenceHighlight";
+import { highlightQuote } from "../../lib/evidenceHighlight";
 import { useScopedRequest } from "../useScopedRequest";
 
 export type StageCitation = {
@@ -16,6 +16,8 @@ export type StageCitation = {
   citation: SourceCitation;
   /** Text of the answer that cited this source, used to pick which lines to light. */
   answerText: string;
+  /** Exact verified quote from this source, lit as-is when present. */
+  quote?: string | null;
 };
 
 type ExcerptStatus = "idle" | "loading" | { error: string } | CitationExcerpt;
@@ -40,7 +42,7 @@ function shortTitle(title: string) {
   return title.replace(/\.(pdf|pptx?|docx?)$/i, "");
 }
 
-export default function SourceStage({ courseId, items, activeKey, onPick, hoverKey, searching, hasAnswerWithoutSource }: {
+export default function SourceStage({ courseId, items, activeKey, onPick, hoverKey, searching, hasAnswerWithoutSource, emptyMessage, stripCaption }: {
   courseId: string;
   items: StageCitation[];
   activeKey: string | null;
@@ -48,6 +50,8 @@ export default function SourceStage({ courseId, items, activeKey, onPick, hoverK
   hoverKey: string | null;
   searching: boolean;
   hasAnswerWithoutSource: boolean;
+  emptyMessage?: string;
+  stripCaption?: string;
 }) {
   const active = items.find(item => item.key === activeKey) ?? null;
   const [excerpt, setExcerpt] = useState<ExcerptStatus>("idle");
@@ -90,7 +94,7 @@ export default function SourceStage({ courseId, items, activeKey, onPick, hoverK
 
   const spans = useMemo(() => (
     excerpt !== "idle" && excerpt !== "loading" && !("error" in excerpt) && active
-      ? highlightEvidence(excerpt.content, active.answerText)
+      ? highlightQuote(excerpt.content, active.quote, active.answerText)
       : []
   ), [excerpt, active]);
   const hasLit = spans.some(span => span.lit);
@@ -149,9 +153,9 @@ export default function SourceStage({ courseId, items, activeKey, onPick, hoverK
         {!active && (
           <div className="flex h-full flex-col justify-center gap-3 text-[var(--eb-ink-muted)]">
             <p className="eb-serif m-0 text-[19px] leading-relaxed text-[var(--eb-ink)]">
-              {hasAnswerWithoutSource
+              {emptyMessage ?? (hasAnswerWithoutSource
                 ? "No passage supported the last answer, so nothing is lit."
-                : "Ask a question and the page your answer comes from will appear here."}
+                : "Ask a question and the page your answer comes from will appear here.")}
             </p>
             <p className="m-0 text-[15px]">The exact lines the answer used are lit, so you can check it against your course.</p>
           </div>
@@ -175,7 +179,11 @@ export default function SourceStage({ courseId, items, activeKey, onPick, hoverK
         {active && spans.length > 0 && (
           <>
             <span className="text-[13px] text-[var(--eb-ink-faint)]">
-              {hasLit ? "Lit lines share the most wording with the answer" : "Retrieved excerpt"}
+              {hasLit
+                ? (active.quote && spans.some(span => span.lit && span.text === active.quote?.replace(/\s+/g, " ").trim())
+                  ? "Lit: the exact line this answer was checked against"
+                  : "Lit lines share the most wording with the answer")
+                : "Retrieved excerpt"}
             </span>
             <p className="eb-serif m-0 mt-3 text-[18px] leading-[1.75] text-[var(--eb-ink-muted)]">
               {spans.map((span, index) => (
@@ -194,7 +202,7 @@ export default function SourceStage({ courseId, items, activeKey, onPick, hoverK
       {(items.length > 0 || searching) && (
         <div className="relative z-[1] flex flex-col gap-2.5">
           <span className="text-sm text-[var(--eb-text-muted)]">
-            {searching ? "Searching your course material" : "Pages this conversation cites"}
+            {searching ? "Searching your course material" : (stripCaption ?? "Pages this conversation cites")}
           </span>
           <div role="group" aria-label="Cited pages" className="flex gap-3.5 overflow-x-auto pb-1">
             {items.map((item, index) => {

@@ -67,3 +67,19 @@ export function highlightEvidence(excerpt: string, answer: string): EvidenceSpan
   const litIndexes = new Set(ranked.filter(item => item.score >= best * 0.75).slice(0, MAX_LIT).map(item => item.index));
   return sentences.map((text, index) => ({ text, lit: litIndexes.has(index) }));
 }
+
+/**
+ * Lights an exact verified quote inside the excerpt (whitespace-insensitive).
+ * Falls back to the word-overlap heuristic when the quote can't be found.
+ */
+export function highlightQuote(excerpt: string, quote: string | null | undefined, answer: string): EvidenceSpan[] {
+  const flat = excerpt.replace(/\s+/g, " ").trim();
+  const needle = (quote ?? "").replace(/\s+/g, " ").trim();
+  const at = needle ? flat.indexOf(needle) : -1;
+  if (at < 0) return highlightEvidence(excerpt, answer);
+  return [
+    { text: flat.slice(0, at).trim(), lit: false },
+    { text: needle, lit: true },
+    { text: flat.slice(at + needle.length).trim(), lit: false },
+  ].filter(span => span.text);
+}

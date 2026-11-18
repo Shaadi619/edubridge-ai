@@ -12,7 +12,7 @@ export type CourseGraphCitation = {
   source_kind: "page" | "slide" | "document";
 };
 
-export type SourceCitation = CourseGraphCitation & { chunk_id?: string };
+export type SourceCitation = CourseGraphCitation & { chunk_id?: string; quote?: string | null };
 
 export type CourseGraphSuggestion = {
   summary: string;
