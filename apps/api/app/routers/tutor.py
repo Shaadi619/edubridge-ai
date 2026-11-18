@@ -5,7 +5,7 @@ from datetime import UTC, datetime
 from math import isfinite
 from time import perf_counter
 from typing import Literal
-from uuid import UUID
+from uuid import UUID, uuid4
 
 import httpx
 from fastapi import APIRouter, Depends, HTTPException
@@ -17,13 +17,16 @@ from app.ai.contracts import (
     TutorAnswer, TutorDraft,
 )
 from app.ai.embeddings import embedding_client
-from app.ai.evidence import normalize_whitespace, quoted_chunks
+from app.ai.evidence import course_source_index, course_source_payload, normalize_whitespace, referenced_chunks
 from app.ai.prompts import ALTERNATIVE_EXPLANATION_SYSTEM_PROMPT, TUTOR_SYSTEM_PROMPT
 from app.auth import AuthenticatedUser, current_user
 from app.concepts import friendly_concept
 from app.config import Settings, get_settings
 from app.mastery import change_misconception_evidence
 from app.routers.notifications import create_notification
+from app.routers.tutor_documents import (
+    SUMMARY_PROMPT, SummaryUnavailable, load_pdf_summary_sources, parse_pdf_summary,
+)
 
 router = APIRouter(prefix="/courses", tags=["tutor"])
 logger = logging.getLogger(__name__)
@@ -35,6 +38,11 @@ NO_INDEXED_EVIDENCE = (
 INSUFFICIENT_EVIDENCE = (
     "I couldn't find enough support in the course materials to answer reliably. "
     "Try naming the specific concept, chapter, or lecture you're working from."
+)
+GREETING = "Hi! Ask me about a concept, lecture, or example from this course and I'll help you work through it."
+UNVERIFIED_DRAFT = (
+    "I found related course material, but couldn't link a reliable answer to it. "
+    "Try asking about one part of the topic."
 )
 
 
@@ -56,6 +64,7 @@ def _remove_internal_references(text: str) -> str:
     cleaned = re.sub(r"\s*\((?:see\s+)?chunk\s+[a-z0-9_-]{6,}\)", "", cleaned, flags=re.IGNORECASE)
     cleaned = re.sub(rf"\b(?:see\s+)?chunk\s+(?:{uuid}|[a-z0-9_-]{{6,}})\b", "the course material", cleaned, flags=re.IGNORECASE)
     cleaned = re.sub(r"\s*\[\s*\{.*?\"chunk_id\".*?\}\s*\]", "", cleaned, flags=re.IGNORECASE | re.DOTALL)
+    cleaned = re.sub(r"\s*\[\s*S\d+(?:\s*,\s*S\d+)*\s*\]", "", cleaned, flags=re.IGNORECASE)
     return cleaned.strip()
 
 
@@ -103,16 +112,23 @@ async def _match_evidence(
 
 def _validated_explanation(
     draft: GroundedExplanationDraft, evidence: dict[str, EvidenceChunk],
-) -> tuple[str, list[Citation]] | None:
-    if not draft.grounded or not 1 <= len(draft.sections) <= 3:
-        return None
+    *,
+    section_limit: int = 3,
+    citation_limit: int = 3,
+) -> tuple[tuple[str, list[Citation]] | None, str]:
+    if not draft.grounded:
+        return None, "model_declined"
+    if not 1 <= len(draft.sections) <= section_limit:
+        return None, "invalid_section_count"
     text: list[str] = []
     citations: dict[str, Citation] = {}
     for section in draft.sections:
         paragraph = _remove_internal_references(section.text)
-        supports = quoted_chunks(section.sources, evidence)
-        if not paragraph or not supports:
-            return None
+        supports = referenced_chunks(section.source_refs, evidence)
+        if not paragraph:
+            return None, "empty_section"
+        if not supports:
+            return None, "unknown_source_ref"
         text.append(paragraph)
         for source in supports:
             if source.chunk_id not in citations:
@@ -121,9 +137,9 @@ def _validated_explanation(
                     document_title=source.document_title, page_number=source.page_number,
                     source_kind=_source_kind(source.document_title, source.page_number),
                 )
-            if len(citations) > 3:
-                return None
-    return "\n\n".join(text), list(citations.values())
+            if len(citations) > citation_limit:
+                return None, "too_many_citations"
+    return ("\n\n".join(text), list(citations.values())), "verified"
 
 
 def _student_quote_matches(quote: str | None, question: str) -> bool:
@@ -138,13 +154,16 @@ def _tutor_decline(message: str) -> TutorAnswer:
     )
 
 
+def _is_greeting(question: str) -> bool:
+    return bool(re.fullmatch(r"(?:hi|hello|hey)(?: there)?[!.?]*", question.strip(), re.IGNORECASE))
+
+
 def _validated_tutor_answer(
-    draft: TutorDraft, question: str, chunks: list[EvidenceChunk],
-) -> TutorAnswer:
-    evidence = {item.chunk_id: item for item in chunks}
-    explanation = _validated_explanation(draft, evidence)
+    draft: TutorDraft, question: str, evidence: dict[str, EvidenceChunk],
+) -> tuple[TutorAnswer, str]:
+    explanation, status = _validated_explanation(draft, evidence)
     if explanation is None:
-        return _tutor_decline(INSUFFICIENT_EVIDENCE)
+        return _tutor_decline(INSUFFICIENT_EVIDENCE if status == "model_declined" else UNVERIFIED_DRAFT), status
     answer, citations = explanation
     analysis = draft.misconception
     misconception_supported = (
@@ -152,12 +171,12 @@ def _validated_tutor_answer(
         and bool(analysis.explanation)
         and bool(analysis.concept or analysis.label)
         and _student_quote_matches(analysis.evidence_from_student, question)
-        and bool(quoted_chunks(draft.misconception_sources, evidence))
+        and bool(referenced_chunks(draft.misconception_source_refs, evidence))
     )
     return TutorAnswer(
         answer=answer, citations=citations, grounded=True,
         misconception=analysis if misconception_supported else MisconceptionAnalysis(detected=False, confidence=0),
-    )
+    ), status
 
 
 def _normalized(value: str) -> str:
@@ -324,10 +343,11 @@ async def tutor(
     settings: Settings = Depends(get_settings),
 ) -> TutorResponse:
     started = perf_counter()
-    configured = embedding_client(settings)
-    if not configured:
-        raise HTTPException(status_code=503, detail="Semantic retrieval is not configured")
-    if not (settings.azure_openai_endpoint and settings.azure_openai_api_key and settings.azure_openai_tier2_deployment):
+    request_id = uuid4().hex
+    summary_request = parse_pdf_summary(request.question)
+    greeting = _is_greeting(request.question)
+    model_tier: AITier | None = None
+    if not (settings.azure_openai_endpoint and settings.azure_openai_api_key and settings.azure_openai_tier1_deployment):
         raise HTTPException(status_code=503, detail="Tutor model is not configured")
     course_id_string = str(course_id)
     key = settings.supabase_service_role_key
@@ -345,36 +365,80 @@ async def tutor(
             conversation.raise_for_status()
             if not conversation.json():
                 raise HTTPException(status_code=404, detail="Conversation not found")
-        embedding_api, embedding_model = configured
-        query_vector = (await embedding_api.embeddings.create(
-            model=embedding_model, input=request.question, encoding_format="float"
-        )).data[0].embedding
-        embedded_at = perf_counter()
-        evidence, reason = await _match_evidence(
-            client, base, headers, course_id_string, query_vector, settings.tutor_min_similarity,
-        )
+        summary_payload = ""
+        if summary_request is not None:
+            embedded_at = perf_counter()
+            try:
+                summary_title, evidence, summary_payload = await load_pdf_summary_sources(
+                    client, base, headers, course_id_string, conversation_id, summary_request,
+                )
+            except SummaryUnavailable as error:
+                evidence, reason = [], str(error)
+        elif greeting:
+            evidence, reason = [], GREETING
+            embedded_at = perf_counter()
+        else:
+            configured = embedding_client(settings)
+            if not configured:
+                raise HTTPException(status_code=503, detail="Semantic retrieval is not configured")
+            embedding_api, embedding_model = configured
+            query_vector = (await embedding_api.embeddings.create(
+                model=embedding_model, input=request.question, encoding_format="float"
+            )).data[0].embedding
+            embedded_at = perf_counter()
+            evidence, reason = await _match_evidence(
+                client, base, headers, course_id_string, query_vector, settings.tutor_min_similarity,
+            )
         retrieved_at = perf_counter()
+        source_index = course_source_index(evidence)
         if evidence:
             provider = AzureOpenAIProvider(
                 endpoint=settings.azure_openai_endpoint, api_key=settings.azure_openai_api_key,
                 api_version=settings.azure_openai_api_version,
                 fast_deployment=settings.azure_openai_tier1_deployment,
-                reasoning_deployment=settings.azure_openai_tier2_deployment,
+                reasoning_deployment="",
             )
+            model_tier = AITier.FAST
+        if evidence and summary_payload:
+            summary = await provider.generate_structured(
+                tier=AITier.FAST, system_prompt=SUMMARY_PROMPT, user_prompt=summary_payload,
+                output_type=GroundedExplanationDraft,
+            )
+            explanation, outcome = _validated_explanation(
+                summary, source_index, section_limit=5, citation_limit=8,
+            )
+            if explanation is None:
+                answer = _tutor_decline(
+                    "I found the PDF, but couldn't verify a summary against its indexed text. "
+                    "Try asking about a specific section instead."
+                )
+            else:
+                text, citations = explanation
+                answer = TutorAnswer(
+                    answer=f"Summary of {summary_title}\n\n{text}", citations=citations, grounded=True,
+                    misconception=MisconceptionAnalysis(detected=False, confidence=0),
+                )
+        elif evidence:
+            user_prompt = json.dumps({
+                "student_question": request.question,
+                "course_evidence": course_source_payload(source_index),
+            })
             draft = await provider.generate_structured(
-                tier=AITier.REASONING, system_prompt=TUTOR_SYSTEM_PROMPT,
-                user_prompt=json.dumps({
-                    "student_question": request.question,
-                    "course_evidence": [
-                        {"chunk_id": item.chunk_id, "content": item.content} for item in evidence
-                    ],
-                }),
+                tier=AITier.FAST, system_prompt=TUTOR_SYSTEM_PROMPT, user_prompt=user_prompt,
                 output_type=TutorDraft,
             )
-            answer = _validated_tutor_answer(draft, request.question, evidence)
+            answer, outcome = _validated_tutor_answer(draft, request.question, source_index)
         else:
             answer = _tutor_decline(reason)
+            outcome = "summary_unavailable" if summary_request is not None else "greeting" if greeting else (
+                "no_indexed_evidence" if reason == NO_INDEXED_EVIDENCE else "no_relevant_evidence"
+            )
         generated_at = perf_counter()
+        if outcome not in {"greeting", "verified"}:
+            logger.warning(
+                "Tutor fallback request_id=%s mode=%s outcome=%s candidates_used=%d",
+                request_id, "pdf_summary" if summary_request is not None else "question", outcome, len(evidence),
+            )
 
         if not conversation_id:
             created = await client.post(
@@ -394,7 +458,7 @@ async def tutor(
             json={
                 "conversation_id": conversation_id, "author_role": "assistant",
                 "content": answer.answer, "grounded": answer.grounded,
-                "model_tier": "reasoning" if evidence else None,
+                "model_tier": model_tier,
             },
         )
         assistant.raise_for_status()
@@ -414,11 +478,10 @@ async def tutor(
                 logger.exception("Misconception persistence failed for course=%s user=%s", course_id_string, user.id)
         finished = perf_counter()
         logger.info(
-            "Tutor latency course=%s user=%s candidates_used=%d grounded=%s embed_ms=%d retrieve_ms=%d generate_ms=%d persist_ms=%d total_ms=%d",
-            course_id_string,
-            user.id,
+            "Tutor latency request_id=%s outcome=%s candidates_used=%d embed_ms=%d retrieve_ms=%d generate_ms=%d persist_ms=%d total_ms=%d",
+            request_id,
+            outcome,
             len(evidence),
-            answer.grounded,
             round((embedded_at - started) * 1000),
             round((retrieved_at - embedded_at) * 1000),
             round((generated_at - retrieved_at) * 1000),
@@ -438,8 +501,7 @@ async def alternative_explanation(
     configured = embedding_client(settings)
     if not configured:
         raise HTTPException(status_code=503, detail="Semantic retrieval is not configured")
-    deployment = settings.azure_openai_tier1_deployment or settings.azure_openai_tier2_deployment
-    if not (settings.azure_openai_endpoint and settings.azure_openai_api_key and deployment):
+    if not (settings.azure_openai_endpoint and settings.azure_openai_api_key and settings.azure_openai_tier1_deployment):
         raise HTTPException(status_code=503, detail="Adaptive explanations are not configured")
 
     format_instructions = {
@@ -477,25 +539,26 @@ async def alternative_explanation(
             api_key=settings.azure_openai_api_key,
             api_version=settings.azure_openai_api_version,
             fast_deployment=settings.azure_openai_tier1_deployment,
-            reasoning_deployment=settings.azure_openai_tier2_deployment,
+            reasoning_deployment="",
         )
+        source_index = course_source_index(evidence)
         generated = await provider.generate_structured(
-            tier=AITier.FAST if settings.azure_openai_tier1_deployment else AITier.REASONING,
+            tier=AITier.FAST,
             system_prompt=ALTERNATIVE_EXPLANATION_SYSTEM_PROMPT,
             user_prompt=json.dumps({
                 "student_question": request.question,
                 "requested_format": request.format,
                 "format_instruction": format_instructions[request.format],
-                "course_evidence": [
-                    {"chunk_id": item.chunk_id, "content": item.content} for item in evidence
-                ],
+                "course_evidence": course_source_payload(source_index),
             }),
             output_type=GroundedExplanationDraft,
         )
-        explanation = _validated_explanation(generated, {item.chunk_id: item for item in evidence})
+        explanation, outcome = _validated_explanation(generated, source_index)
         if explanation is None:
             return AlternativeExplanationResponse(
-                format=request.format, answer=INSUFFICIENT_EVIDENCE, citations=[], grounded=False,
+                format=request.format,
+                answer=INSUFFICIENT_EVIDENCE if outcome == "model_declined" else UNVERIFIED_DRAFT,
+                citations=[], grounded=False,
             )
         answer, citations = explanation
         return AlternativeExplanationResponse(

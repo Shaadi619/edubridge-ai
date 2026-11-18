@@ -73,7 +73,7 @@ class EvidenceQuote(BaseModel):
 
 class GroundedExplanationSection(BaseModel):
     text: str
-    sources: list[EvidenceQuote]
+    source_refs: list[str]
 
 
 class GroundedExplanationDraft(BaseModel):
@@ -83,7 +83,7 @@ class GroundedExplanationDraft(BaseModel):
 
 class TutorDraft(GroundedExplanationDraft):
     misconception: MisconceptionAnalysis
-    misconception_sources: list[EvidenceQuote]
+    misconception_source_refs: list[str]
 
 
 class QuizItemVerification(BaseModel):

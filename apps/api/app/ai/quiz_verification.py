@@ -1,4 +1,5 @@
 import json
+import logging
 from collections import Counter
 
 from pydantic import ValidationError
@@ -14,6 +15,8 @@ from app.ai.contracts import (
 from app.ai.evidence import normalize_whitespace, quoted_chunks
 from app.ai.prompts import QUIZ_SYSTEM_PROMPT, QUIZ_VERIFICATION_SYSTEM_PROMPT
 from app.ai.provider import AIProvider
+
+logger = logging.getLogger(__name__)
 
 
 class QuizVerificationError(ValueError):
@@ -36,6 +39,7 @@ async def generate_verified_quiz(
     accepted: dict[int, QuizQuestion] = {}
     title = "Course practice quiz"
     for attempt in range(2):
+        rejected: Counter[str] = Counter()
         missing = [index for index in range(question_count) if index not in accepted]
         try:
             draft = await provider.generate_structured(
@@ -62,6 +66,7 @@ async def generate_verified_quiz(
                 output_type=QuizResult,
             )
         except (ValidationError, json.JSONDecodeError):
+            logger.warning("Quiz draft schema rejected on pass %d", attempt + 1)
             continue
         if attempt == 0 and draft.title.strip():
             title = draft.title.strip()
@@ -80,10 +85,13 @@ async def generate_verified_quiz(
                 or not 0 <= question.correct_option < 4
                 or not any(citation.chunk_id in sources for citation in question.citations)
             ):
+                rejected["invalid_draft"] += 1
                 continue
             candidates[index] = question
             seen_prompts.add(prompt_key)
         if not candidates:
+            logger.info("Quiz pass %d had no eligible drafts (requested=%d returned=%d)",
+                        attempt + 1, len(missing), len(draft.questions))
             continue
 
         try:
@@ -100,6 +108,7 @@ async def generate_verified_quiz(
                 output_type=QuizVerificationResult,
             )
         except (ValidationError, json.JSONDecodeError):
+            logger.warning("Quiz verifier schema rejected on pass %d", attempt + 1)
             continue
 
         verdict_counts = Counter(verdict.question_index for verdict in verification.questions)
@@ -109,9 +118,14 @@ async def generate_verified_quiz(
             if (
                 question is None
                 or verdict_counts[index] != 1
-                or verdict.supported_option_indices != [question.correct_option]
-                or not verdict.explanation.strip()
             ):
+                rejected["invalid_verdict_index"] += 1
+                continue
+            if verdict.supported_option_indices != [question.correct_option]:
+                rejected["unconfirmed_key"] += 1
+                continue
+            if not verdict.explanation.strip():
+                rejected["missing_explanation"] += 1
                 continue
             citations = [
                 Citation(
@@ -127,7 +141,19 @@ async def generate_verified_quiz(
                     "explanation": verdict.explanation.strip(),
                     "citations": citations,
                 })
+            else:
+                rejected["quote_mismatch"] += 1
+        logger.info("Quiz pass %d verified %d/%d total (drafts=%d candidates=%d verdicts=%d rejected=%s)",
+                    attempt + 1, len(accepted), question_count, len(draft.questions),
+                    len(candidates), len(verification.questions), dict(rejected))
         if len(accepted) == question_count:
             return QuizResult(title=title, questions=[accepted[index] for index in range(question_count)])
 
-    raise QuizVerificationError("The quiz could not be verified against your course materials. Try again.")
+    if len(accepted) >= 3:
+        return QuizResult(title=title, questions=[accepted[index] for index in sorted(accepted)])
+    logger.warning("Quiz generation ended with %d verified questions out of %d requested",
+                   len(accepted), question_count)
+    raise QuizVerificationError(
+        "The quiz could not be verified against your course materials. "
+        "Try again or choose a specific topic from My Progress."
+    )

@@ -127,6 +127,22 @@ def test_invalid_drafts_never_reach_verifier(updates: dict) -> None:
     ]
 
 
+def test_short_quiz_only_contains_verified_items_after_refill() -> None:
+    draft = QuizResult(title="Plant quiz", questions=[
+        draft_question(f"Question {index}?") for index in range(4)
+    ])
+    provider = SimpleNamespace(generate_structured=AsyncMock(side_effect=[
+        draft,
+        QuizVerificationResult(questions=[verified_item(index) for index in (0, 2, 3)]),
+        QuizResult(title="Refill", questions=[draft_question("Replacement?")]),
+        QuizVerificationResult(questions=[verified_item(1, supported_option_indices=[1])]),
+    ]))
+
+    assert [question.prompt for question in generate(provider, count=4).questions] == [
+        "Question 0?", "Question 2?", "Question 3?",
+    ]
+
+
 @pytest.mark.parametrize("verdicts", [
     [],
     [verified_item(1)],
