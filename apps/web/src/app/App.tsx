@@ -28,6 +28,7 @@ import { clearStudentSession, readQuizDraft, readStudentLocation, writeQuizDraft
 
 const CitationPreview = lazy(() => import("./components/CitationPreview"));
 const AskWorkspace = lazy(() => import("./student/AskWorkspace"));
+const TodayStage = lazy(() => import("./teacher/TodayStage"));
 
 // ─── Types ────────────────────────────────────────────────────────────────
 
@@ -2402,10 +2403,19 @@ function TeacherOverview({ requests, setRequests, onGoMaterials, announcements, 
 
   return (
     <div>
-      <div className="mb-8">
-        <h1 className="font-display text-2xl text-primary">Welcome, {teacherName}</h1>
-        <p className="text-sm text-muted-foreground mt-1 font-light">Here’s what’s happening in {course.name}.</p>
-      </div>
+      <Suspense fallback={<div role="status" className="eb-stage mb-10 rounded-2xl px-8 py-8 text-sm text-[#A9B6C2]">Loading today’s queue…</div>}>
+        <TodayStage
+          courseId={course.id}
+          analytics={analytics}
+          loading={analyticsLoading}
+          accessToken={accessToken}
+          assigningId={assigningIntervention}
+          assignedIds={assignedInterventions}
+          onAssign={item => void assignPractice(item)}
+          onDraft={item => void draftIntervention(item)}
+          onViewStudent={onViewStudent}
+        />
+      </Suspense>
       <div className="grid grid-cols-2 lg:grid-cols-4 gap-4 mb-10">
         {[
           { label: "Active Students", val: analyticsLoading ? "…" : String(analytics?.active_students ?? 0), sub: `in ${course.name}`, icon: Users, color: "text-blue-500", bg: "bg-blue-50" },
@@ -2483,67 +2493,6 @@ function TeacherOverview({ requests, setRequests, onGoMaterials, announcements, 
           <EnrollmentPanel requests={requests} setRequests={setRequests} focusedEnrollmentId={focusedEnrollmentId} focusKey={focusKey} />
         </div>
       </div>
-      <div className="mb-10">
-        <div className="flex items-end justify-between gap-4 mb-4">
-          <div>
-            <h2 className="font-semibold text-foreground">Teacher Intervention Queue</h2>
-            <p className="text-xs text-muted-foreground mt-1">Prioritized from learning evidence without using additional AI tokens.</p>
-          </div>
-          <span className="text-xs font-mono text-muted-foreground">{analytics?.intervention_queue.length ?? 0} items need review</span>
-        </div>
-        <div className="space-y-3">
-          {(analytics?.intervention_queue ?? []).map(item => (
-            <div key={item.id} className="bg-card border border-border rounded-xl px-5 py-4 shadow-sm hover:border-amber-300/60 transition-colors">
-              <div className="flex items-start gap-4">
-                <div className={`w-2 h-2 rounded-full mt-1.5 shrink-0 ${item.priority === "high" ? "bg-red-500" : item.priority === "medium" ? "bg-amber-500" : "bg-blue-500"}`} />
-                <div className="flex-1 min-w-0">
-                  <div className="flex items-center gap-2 flex-wrap mb-1">
-                    <span className="font-semibold text-sm text-foreground">{item.student}</span>
-                    <span className="text-xs font-medium text-primary bg-primary/10 px-2 py-0.5 rounded-full">{item.concept}</span>
-                    <span className={`text-[10px] font-semibold uppercase tracking-wide px-2 py-0.5 rounded-full ${item.priority === "high" ? "bg-red-50 text-red-700" : "bg-amber-50 text-amber-700"}`}>{item.priority}</span>
-                    <span className={`text-[10px] font-mono uppercase rounded-full px-2 py-0.5 ${item.source === "prerequisite_gap" ? "bg-violet-50 text-violet-700" : "text-muted-foreground"}`}>{item.source === "prerequisite_gap" ? "possible prerequisite gap" : item.source.replace("_", " ")}</span>
-                  </div>
-                  <p className="text-xs text-muted-foreground leading-relaxed">{item.reason}</p>
-                  <p className="text-xs text-foreground mt-2"><span className="font-semibold">Recommended:</span> {item.recommended_action}</p>
-                  {item.citations.length > 0 && (
-                    <div className="flex flex-wrap gap-2 mt-3">
-                      {item.citations.map((citation, index) => (
-                        <span key={`${citation.document_title}-${citation.page_number}-${index}`} className="inline-flex items-center gap-1.5 text-[11px] text-primary bg-primary/8 border border-primary/15 rounded-lg px-2.5 py-1">
-                          <BookMarked size={11} />
-                          Read {citation.document_title}{citation.page_number ? ` · ${citation.source_kind === "slide" ? "Slide" : "Page"} ${citation.page_number}` : ""}
-                        </span>
-                      ))}
-                    </div>
-                  )}
-                </div>
-                <div className="shrink-0 flex flex-col items-end gap-2">
-                  {item.due_at && <span className="text-[10px] font-mono text-muted-foreground flex items-center gap-1"><Clock size={10} />{new Date(item.due_at).toLocaleDateString(undefined, { month: "short", day: "numeric" })}</span>}
-                  <div className="flex gap-2">
-                    <button onClick={() => onViewStudent(item.student_id)} className="text-xs font-semibold text-primary border border-border rounded-lg px-3 py-1.5 hover:bg-muted transition-colors">View student</button>
-                    <button
-                      onClick={() => void draftIntervention(item)}
-                      disabled={item.practice_assigned || assignedInterventions.includes(item.id)}
-                      className="text-xs font-semibold text-violet-700 border border-violet-200 bg-violet-50 rounded-lg px-3 py-1.5 disabled:opacity-50 flex items-center gap-1.5"
-                    >
-                      <Sparkles size={11} />Draft with AI
-                    </button>
-                    <button
-                      onClick={() => void assignPractice(item)}
-                      disabled={assigningIntervention === item.id || item.practice_assigned || assignedInterventions.includes(item.id)}
-                      className="text-xs font-semibold bg-primary text-primary-foreground rounded-lg px-3 py-1.5 disabled:opacity-50 flex items-center gap-1.5"
-                    >
-                      {assigningIntervention === item.id ? <RefreshCw size={11} className="animate-spin" /> : item.practice_assigned || assignedInterventions.includes(item.id) ? <CheckCircle size={11} /> : <Target size={11} />}
-                      {item.practice_assigned || assignedInterventions.includes(item.id) ? "Assigned" : "Assign practice"}
-                    </button>
-                  </div>
-                </div>
-              </div>
-            </div>
-          ))}
-          {!analyticsLoading && (analytics?.intervention_queue.length ?? 0) === 0 && <div className="text-sm text-muted-foreground bg-card border border-border rounded-xl p-5">No students currently require intervention.</div>}
-        </div>
-      </div>
-
       {workReviews.length > 0 && <div className="mb-10">
         <div className="flex items-end justify-between gap-4 mb-4"><div><h2 className="font-semibold text-foreground">Submitted Work Review</h2><p className="text-xs text-muted-foreground mt-1">Confirm or dismiss AI-detected misconceptions before they affect mastery.</p></div><span className="text-xs font-mono text-muted-foreground">{workReviews.length} pending</span></div>
         <div className="space-y-3">{workReviews.map(submission => {

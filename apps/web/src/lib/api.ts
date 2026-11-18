@@ -438,7 +438,9 @@ export const api = {
         recommended_action: string;
         due_at: string | null;
         practice_assigned: boolean;
-        citations: Array<{ document_title: string; page_number: number | null; source_kind: "page" | "slide" | "document" }>;
+        misconception_id?: string;
+        student_evidence?: string | null;
+        citations: Array<{ document_title: string; page_number: number | null; source_kind: "page" | "slide" | "document"; chunk_id?: string }>;
       }>;
       misconception_network: {
         nodes: Array<{ id: string; concept: string; affected_students: number; occurrences: number; connection_strength: number }>;

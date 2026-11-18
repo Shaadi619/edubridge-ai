@@ -143,6 +143,8 @@ def _intervention_queue(
                 "concept": misconception["concept"],
                 "priority": "high",
                 "source": "retention",
+                "misconception_id": misconception["id"],
+                "student_evidence": misconception.get("student_evidence"),
                 "reason": "The student did not retain this concept during the follow-up check.",
                 "recommended_action": "Review the cited course material with the student, then assign targeted practice.",
                 "due_at": misconception.get("retention_due_at"),
@@ -157,6 +159,8 @@ def _intervention_queue(
                 "concept": misconception["concept"],
                 "priority": "high" if repeated else "medium",
                 "source": "misconception",
+                "misconception_id": misconception["id"],
+                "student_evidence": misconception.get("student_evidence"),
                 "reason": "This misconception has appeared more than once." if repeated else "An unresolved misconception was detected.",
                 "recommended_action": misconception.get("recommended_intervention") or "Ask the student to complete a teach-back check before marking it resolved.",
                 "due_at": misconception.get("last_detected_at") or misconception.get("created_at"),
@@ -357,6 +361,7 @@ async def _misconception_course_citations(
             "document_title": title,
             "page_number": chunk.get("page_number"),
             "source_kind": _source_kind(title, chunk.get("page_number")),
+            "chunk_id": row["chunk_id"],
         }
         current = citations_by_answer.setdefault(row["message_id"], [])
         if citation not in current and len(current) < 2:
@@ -670,7 +675,7 @@ async def teacher_course_analytics(
                 answers = [{"confidence": None, **row} for row in answers_response.json()]
         misconceptions_response = await client.get(
             f"{base}/rest/v1/misconceptions", headers=headers,
-            params={"course_id": f"eq.{course_id}", "select": "id,student_id,source_message_id,concept,explanation,recommended_intervention,status,created_at,occurrence_count,last_detected_at,retention_status,retention_due_at", "order": "created_at.desc"},
+            params={"course_id": f"eq.{course_id}", "select": "id,student_id,source_message_id,concept,explanation,student_evidence,recommended_intervention,status,created_at,occurrence_count,last_detected_at,retention_status,retention_due_at", "order": "created_at.desc"},
         )
         misconceptions_response.raise_for_status()
         misconceptions = misconceptions_response.json()

@@ -21,6 +21,26 @@ def test_repeated_misconception_is_high_priority() -> None:
     assert queue[0]["student"] == "Sam Student"
 
 
+def test_misconception_items_carry_the_students_words_and_id() -> None:
+    now = datetime.now(UTC)
+    queue = _intervention_queue(
+        [{
+            "id": "mis-1", "student_id": "student-1", "concept": "Transformers",
+            "student_evidence": "the same as the one from the movie",
+            "status": "open", "occurrence_count": 1, "retention_status": "not_scheduled",
+            "created_at": now.isoformat(), "last_detected_at": now.isoformat(),
+        }],
+        [],
+        {"student-1": "Sam Student"},
+        now,
+        {"mis-1": [{"document_title": "Transformers.pdf", "page_number": 11, "source_kind": "page", "chunk_id": "chunk-11"}]},
+    )
+
+    assert queue[0]["misconception_id"] == "mis-1"
+    assert queue[0]["student_evidence"] == "the same as the one from the movie"
+    assert queue[0]["citations"][0]["chunk_id"] == "chunk-11"
+
+
 def test_teacher_assignment_is_persistently_reported() -> None:
     now = datetime.now(UTC)
     queue = _intervention_queue(
