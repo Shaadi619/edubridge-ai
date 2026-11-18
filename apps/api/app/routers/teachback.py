@@ -11,7 +11,7 @@ from pydantic import BaseModel, Field
 from app.ai.azure_provider import AzureOpenAIProvider
 from app.ai.contracts import AITier, Citation, EvidenceChunk, TeachBackEvaluation, TeachBackQuestion
 from app.ai.embeddings import embedding_client
-from app.ai.evidence import quoted_chunks
+from app.ai.evidence import normalize_whitespace, quoted_chunks
 from app.ai.prompts import RETENTION_QUESTION_SYSTEM_PROMPT, TEACH_BACK_EVALUATION_SYSTEM_PROMPT, TEACH_BACK_QUESTION_SYSTEM_PROMPT
 from app.auth import AuthenticatedUser, current_user
 from app.concepts import friendly_concept, group_concept_records
@@ -31,6 +31,8 @@ class FriendlyCitation(BaseModel):
     document_title: str
     page_number: int | None
     source_kind: Literal["page", "slide", "document"]
+    chunk_id: str | None = None
+    quote: str | None = None
 
 
 class TeachBackStartResponse(BaseModel):
@@ -129,12 +131,25 @@ async def _evaluate_response(
     return evaluation, citations
 
 
-def _friendly(citations: list[Citation]) -> list[FriendlyCitation]:
+def _friendly(citations: list[Citation], quotes: dict[str, str] | None = None) -> list[FriendlyCitation]:
     return [FriendlyCitation(
         document_title=item.document_title,
         page_number=item.page_number,
         source_kind=item.source_kind,
+        chunk_id=item.chunk_id,
+        quote=(quotes or {}).get(item.chunk_id),
     ) for item in citations]
+
+
+def _evidence_quotes(evaluation: TeachBackEvaluation, evidence: list[EvidenceChunk]) -> dict[str, str]:
+    """The evaluator's quotes that really appear in the cited course text, keyed by chunk."""
+    content = {item.chunk_id: normalize_whitespace(item.content) for item in evidence}
+    quotes: dict[str, str] = {}
+    for reference in evaluation.sources:
+        quote = normalize_whitespace(reference.quote)
+        if quote and reference.chunk_id not in quotes and quote in content.get(reference.chunk_id, ""):
+            quotes[reference.chunk_id] = quote
+    return quotes
 
 
 @router.get("/{course_id}/my-misconceptions")
@@ -319,7 +334,7 @@ async def submit_teach_back(
                     metadata={"misconception_id": verification["misconception_id"], "student_id": user.id},
                 )
         return TeachBackResultResponse(
-            verdict=evaluation.verdict, feedback=evaluation.feedback, citations=_friendly(citations),
+            verdict=evaluation.verdict, feedback=evaluation.feedback, citations=_friendly(citations, _evidence_quotes(evaluation, evidence)),
         )
 
 
@@ -479,5 +494,5 @@ async def submit_retention_check(
                 metadata={"misconception_id": check["misconception_id"], "student_id": user.id},
             )
         return TeachBackResultResponse(
-            verdict=evaluation.verdict, feedback=evaluation.feedback, citations=_friendly(citations),
+            verdict=evaluation.verdict, feedback=evaluation.feedback, citations=_friendly(citations, _evidence_quotes(evaluation, evidence)),
         )

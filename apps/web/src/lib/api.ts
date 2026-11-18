@@ -387,13 +387,13 @@ export const api = {
     request<{
       verification_id: string;
       question: string;
-      citations: Array<{ document_title: string; page_number: number | null; source_kind: "page" | "slide" | "document" }>;
+      citations: Array<{ document_title: string; page_number: number | null; source_kind: "page" | "slide" | "document"; chunk_id?: string | null; quote?: string | null }>;
     }>(`/courses/${courseId}/misconceptions/${misconceptionId}/teach-back`, { method: "POST" }, accessToken),
   submitTeachBack: (courseId: string, verificationId: string, response: string, accessToken: string) =>
     request<{
       verdict: "still_present" | "improving" | "corrected";
       feedback: string;
-      citations: Array<{ document_title: string; page_number: number | null; source_kind: "page" | "slide" | "document" }>;
+      citations: Array<{ document_title: string; page_number: number | null; source_kind: "page" | "slide" | "document"; chunk_id?: string | null; quote?: string | null }>;
     }>(`/courses/${courseId}/teach-back/${verificationId}/submit`, { method: "POST", body: JSON.stringify({ response }) }, accessToken),
   transcribeTeachBack: (
     courseId: string,
@@ -408,13 +408,13 @@ export const api = {
     request<{
       verification_id: string;
       question: string;
-      citations: Array<{ document_title: string; page_number: number | null; source_kind: "page" | "slide" | "document" }>;
+      citations: Array<{ document_title: string; page_number: number | null; source_kind: "page" | "slide" | "document"; chunk_id?: string | null; quote?: string | null }>;
     }>(`/courses/${courseId}/misconceptions/${misconceptionId}/retention-check`, { method: "POST" }, accessToken),
   submitRetentionCheck: (courseId: string, checkId: string, response: string, accessToken: string) =>
     request<{
       verdict: "still_present" | "improving" | "corrected";
       feedback: string;
-      citations: Array<{ document_title: string; page_number: number | null; source_kind: "page" | "slide" | "document" }>;
+      citations: Array<{ document_title: string; page_number: number | null; source_kind: "page" | "slide" | "document"; chunk_id?: string | null; quote?: string | null }>;
     }>(`/courses/${courseId}/retention-check/${checkId}/submit`, { method: "POST", body: JSON.stringify({ response }) }, accessToken),
   teacherCourseAnalytics: (courseId: string, accessToken: string, signal?: AbortSignal) =>
     request<{

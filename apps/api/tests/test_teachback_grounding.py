@@ -116,6 +116,7 @@ def test_supported_verdict_updates_progress(monkeypatch, endpoint, retention_sta
     assert result.verdict == "corrected"
     assert result.citations[0].model_dump() == {
         "document_title": "Course notes.pdf", "page_number": 5, "source_kind": "page",
+        "chunk_id": SOURCE.chunk_id, "quote": VALID_QUOTE.quote,
     }
     assert client.patch.await_count == 2
     update = client.patch.await_args.kwargs["json"]
@@ -124,3 +125,11 @@ def test_supported_verdict_updates_progress(monkeypatch, endpoint, retention_sta
     model.assert_awaited_once()
     mastery.assert_awaited_once()
     notification.assert_awaited_once()
+
+
+def test_only_quotes_found_in_the_course_text_are_returned() -> None:
+    evaluation = TeachBackEvaluation(
+        grounded=True, verdict="corrected", feedback="ok",
+        sources=[EvidenceQuote(chunk_id=SOURCE.chunk_id, quote="Invented line."), VALID_QUOTE],
+    )
+    assert teachback._evidence_quotes(evaluation, [SOURCE]) == {SOURCE.chunk_id: VALID_QUOTE.quote}

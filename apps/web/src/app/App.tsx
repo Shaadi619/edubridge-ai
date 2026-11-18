@@ -31,6 +31,7 @@ const AskWorkspace = lazy(() => import("./student/AskWorkspace"));
 const TodayStage = lazy(() => import("./teacher/TodayStage"));
 const QuizStage = lazy(() => import("./student/QuizStage"));
 const ProgressStage = lazy(() => import("./student/ProgressStage"));
+const CheckDialog = lazy(() => import("./student/CheckDialog"));
 
 // ─── Types ────────────────────────────────────────────────────────────────
 
@@ -3580,8 +3581,10 @@ function StudentDashboard({ onLogout, darkMode, setDarkMode }: { onLogout: () =>
                   onGoQuiz={() => { setPracticeConcept(null); setTab("quiz"); }}
                   onPractice={concept => { setPracticeConcept(concept); setTab("quiz"); }}
                   renderCheck={({ misconception, mode, onClose, onComplete }) => (
-                    <TeachBackModal courseId={selectedCourse.id} courseName={selectedCourse.name} misconception={misconception}
-                      mode={mode} accessToken={session.access_token} onClose={onClose} onComplete={onComplete} />
+                    <Suspense fallback={null}>
+                      <CheckDialog courseId={selectedCourse.id} courseName={selectedCourse.name} misconception={misconception}
+                        mode={mode} accessToken={session.access_token} onClose={onClose} onComplete={onComplete} />
+                    </Suspense>
                   )} />
               </Suspense>}
               {tab === "enroll" && <StudentEnroll courses={studentCourses} />}
@@ -3828,185 +3831,6 @@ const QUIZ_QUESTIONS = [
     explanation: "**Semi-conservative** means each new double helix retains one original (parental) strand and one newly synthesized strand. This was confirmed by the Meselson-Stahl experiment using nitrogen isotope labeling.",
   },
 ];
-
-function TeachBackModal({ courseId, courseName, misconception, mode, accessToken, onClose, onComplete }: {
-  courseId: string;
-  courseName: string;
-  misconception: Awaited<ReturnType<typeof api.myMisconceptions>>[number];
-  mode: "teach-back" | "retention";
-  accessToken: string;
-  onClose: () => void;
-  onComplete: () => Promise<void>;
-}) {
-  type Start = Awaited<ReturnType<typeof api.startTeachBack>>;
-  type Result = Awaited<ReturnType<typeof api.submitTeachBack>>;
-  const [check, setCheck] = useState<Start | null>(null);
-  const [response, setResponse] = useState("");
-  const [result, setResult] = useState<Result | null>(null);
-  const [loading, setLoading] = useState(true);
-  const [submitting, setSubmitting] = useState(false);
-  const [error, setError] = useState<string | null>(null);
-  const [recording, setRecording] = useState(false);
-  const [transcribing, setTranscribing] = useState(false);
-  const [recordingSeconds, setRecordingSeconds] = useState(0);
-  const recorderRef = useRef<MediaRecorder | null>(null);
-  const streamRef = useRef<MediaStream | null>(null);
-  const audioChunksRef = useRef<Blob[]>([]);
-  const autoStopRef = useRef<number | null>(null);
-  const mountedRef = useRef(true);
-
-  const releaseMicrophone = useCallback(() => {
-    streamRef.current?.getTracks().forEach(track => track.stop());
-    streamRef.current = null;
-    if (autoStopRef.current !== null) window.clearTimeout(autoStopRef.current);
-    autoStopRef.current = null;
-  }, []);
-
-  useEffect(() => () => {
-    mountedRef.current = false;
-    if (recorderRef.current && recorderRef.current.state !== "inactive") {
-      recorderRef.current.onstop = null;
-      recorderRef.current.stop();
-    }
-    releaseMicrophone();
-  }, [releaseMicrophone]);
-
-  useEffect(() => {
-    if (!recording) return;
-    const timer = window.setInterval(() => setRecordingSeconds(value => value + 1), 1000);
-    return () => window.clearInterval(timer);
-  }, [recording]);
-
-  useEffect(() => {
-    setLoading(true);
-    const start = mode === "retention" ? api.startRetentionCheck : api.startTeachBack;
-    void start(courseId, misconception.id, accessToken)
-      .then(setCheck)
-      .catch(cause => setError(cause instanceof Error ? cause.message : "Could not create the understanding check."))
-      .finally(() => setLoading(false));
-  }, [accessToken, courseId, misconception.id, mode]);
-
-  const submit = async () => {
-    if (!check || response.trim().length < 10) return;
-    setSubmitting(true);
-    setError(null);
-    try {
-      const evaluation = mode === "retention"
-        ? await api.submitRetentionCheck(courseId, check.verification_id, response.trim(), accessToken)
-        : await api.submitTeachBack(courseId, check.verification_id, response.trim(), accessToken);
-      setResult(evaluation);
-      await onComplete();
-    } catch (cause) {
-      setError(cause instanceof Error ? cause.message : "Could not evaluate your explanation.");
-    } finally {
-      setSubmitting(false);
-    }
-  };
-
-  const stopRecording = () => {
-    if (recorderRef.current?.state === "recording") recorderRef.current.stop();
-  };
-
-  const startRecording = async () => {
-    if (!navigator.mediaDevices?.getUserMedia || typeof MediaRecorder === "undefined") {
-      setError("Voice recording is not supported in this browser. You can still type your explanation.");
-      return;
-    }
-    setError(null);
-    setRecordingSeconds(0);
-    try {
-      const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
-      streamRef.current = stream;
-      const candidates = ["audio/webm;codecs=opus", "audio/mp4", "audio/ogg;codecs=opus"];
-      const mimeType = candidates.find(candidate => MediaRecorder.isTypeSupported(candidate));
-      const recorder = new MediaRecorder(stream, mimeType ? { mimeType } : undefined);
-      recorderRef.current = recorder;
-      audioChunksRef.current = [];
-      recorder.ondataavailable = event => {
-        if (event.data.size > 0) audioChunksRef.current.push(event.data);
-      };
-      recorder.onstop = () => {
-        const blob = new Blob(audioChunksRef.current, { type: recorder.mimeType || "audio/webm" });
-        releaseMicrophone();
-        if (!mountedRef.current) return;
-        setRecording(false);
-        if (!blob.size) {
-          setError("No audio was captured. Check microphone permission and try again.");
-          return;
-        }
-        setTranscribing(true);
-        const reader = new FileReader();
-        reader.onload = () => {
-          const dataUrl = String(reader.result ?? "");
-          const extension = blob.type.includes("mp4") ? "m4a" : blob.type.includes("ogg") ? "ogg" : "webm";
-          void api.transcribeTeachBack(courseId, {
-            filename: `teach-back.${extension}`,
-            mime_type: blob.type,
-            data_base64: dataUrl.split(",")[1] ?? "",
-          }, accessToken).then(({ transcript }) => {
-            if (mountedRef.current) setResponse(transcript);
-          }).catch(cause => {
-            if (mountedRef.current) setError(cause instanceof Error ? cause.message : "Could not transcribe your recording.");
-          }).finally(() => {
-            if (mountedRef.current) setTranscribing(false);
-          });
-        };
-        reader.onerror = () => {
-          setTranscribing(false);
-          setError("The browser could not read this recording. Please try again.");
-        };
-        reader.readAsDataURL(blob);
-      };
-      recorder.start(250);
-      setRecording(true);
-      autoStopRef.current = window.setTimeout(stopRecording, 90_000);
-    } catch (cause) {
-      releaseMicrophone();
-      setError(cause instanceof DOMException && cause.name === "NotAllowedError"
-        ? "Microphone permission was denied. Allow microphone access or type your explanation."
-        : "The microphone could not be started. You can still type your explanation.");
-    }
-  };
-
-  const citations = result?.citations ?? check?.citations ?? [];
-  return <div className="fixed inset-0 z-50 bg-black/45 flex items-center justify-center p-4">
-    <motion.div initial={{ opacity: 0, scale: 0.97 }} animate={{ opacity: 1, scale: 1 }} className="bg-card border border-border rounded-2xl shadow-2xl w-full max-w-xl overflow-hidden">
-      <div className="px-6 py-5 border-b border-border flex items-start gap-3">
-        <div className="w-9 h-9 rounded-xl bg-purple-50 text-purple-600 flex items-center justify-center shrink-0"><Brain size={16} /></div>
-        <div className="flex-1"><h2 className="font-semibold text-foreground">{mode === "retention" ? "Retention check" : "Teach-back check"}</h2><p className="text-xs text-muted-foreground mt-0.5">{courseName} · {misconception.concept}</p></div>
-        <button onClick={onClose} className="p-1.5 hover:bg-muted rounded-lg text-muted-foreground"><X size={15} /></button>
-      </div>
-      <div className="p-6">
-        {loading ? <div className="flex items-center gap-3 text-sm text-muted-foreground py-8 justify-center"><TypingIndicator />Creating one grounded question…</div> : error && !check ? <div className="bg-red-50 border border-red-200 text-red-700 text-sm rounded-xl p-4">{error}</div> : check && !result ? <>
-          <div className="bg-muted/50 border border-border rounded-xl p-4 mb-4"><div className="text-[10px] font-mono uppercase text-muted-foreground mb-2">Explain in your own words</div><p className="text-sm font-medium text-foreground leading-relaxed">{check.question}</p></div>
-          <textarea value={response} onChange={event => setResponse(event.target.value)} rows={6} placeholder="Type your explanation, or record it below…" disabled={recording || transcribing} className="w-full border border-border rounded-xl px-4 py-3 text-sm bg-background focus:outline-none focus:ring-2 focus:ring-ring resize-none disabled:opacity-60" />
-          <div className="mt-3 flex flex-wrap items-center gap-3">
-            <button
-              type="button"
-              onClick={recording ? stopRecording : () => void startRecording()}
-              disabled={transcribing || submitting}
-              className={`inline-flex items-center gap-2 rounded-xl border px-4 py-2.5 text-xs font-semibold transition-colors disabled:opacity-40 ${recording ? "border-red-300 bg-red-50 text-red-700" : "border-border bg-card text-foreground hover:bg-muted"}`}
-            >
-              {recording ? <><Square size={13} fill="currentColor" />Stop recording · {recordingSeconds}s</> : transcribing ? <><TypingIndicator />Transcribing…</> : <><Mic size={14} />Record explanation</>}
-            </button>
-            <span className="text-[10px] text-muted-foreground">Maximum 90 seconds. Audio is transcribed, not stored.</span>
-          </div>
-          {error && <div className="text-xs text-red-600 mt-2">{error}</div>}
-          <button onClick={() => void submit()} disabled={response.trim().length < 10 || submitting || recording || transcribing} className="w-full mt-4 bg-primary text-primary-foreground rounded-xl py-3 text-sm font-semibold disabled:opacity-40 flex items-center justify-center gap-2">
-            {submitting ? <><TypingIndicator />Checking your explanation…</> : <><CheckCircle size={14} />{mode === "retention" ? "Submit retention check" : "Submit teach-back"}</>}
-          </button>
-        </> : result ? <>
-          <div className={`border rounded-xl p-5 ${result.verdict === "corrected" ? "bg-emerald-50 border-emerald-200" : result.verdict === "improving" ? "bg-blue-50 border-blue-200" : "bg-amber-50 border-amber-200"}`}>
-            <div className="font-semibold text-foreground mb-2">{result.verdict === "corrected" ? mode === "retention" ? "Retention verified" : "Understanding verified" : result.verdict === "improving" ? "You’re making progress" : "This needs another review"}</div>
-            <p className="text-sm text-muted-foreground leading-relaxed">{result.feedback}</p>
-          </div>
-          <button onClick={onClose} className="w-full mt-4 bg-primary text-primary-foreground rounded-xl py-3 text-sm font-semibold">Return to My Progress</button>
-        </> : null}
-        {citations.length > 0 && <div className="mt-5"><div className="text-[10px] font-semibold uppercase tracking-wide text-muted-foreground mb-2">Course evidence</div><div className="space-y-1.5">{citations.map((citation, index) => <div key={`${citation.document_title}-${citation.page_number}-${index}`} className="text-xs border border-border bg-muted/40 rounded-lg px-3 py-2 flex gap-2"><FileText size={12} className="text-primary shrink-0" /><span className="truncate">{citation.document_title}</span>{citation.page_number && <span className="ml-auto shrink-0">{citation.source_kind === "slide" ? "Slide" : "Page"} {citation.page_number}</span>}</div>)}</div></div>}
-      </div>
-    </motion.div>
-  </div>;
-}
 
 // ─── Document Viewer Modal ────────────────────────────────────────────────
 
