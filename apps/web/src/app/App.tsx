@@ -21,10 +21,13 @@ import {
 import { useAuth } from "../auth/AuthContext";
 import { supabase } from "../lib/supabase";
 import { api, ApiError, type CourseGraphSuggestion, type ExplanationFormat, type SourceCitation, type TeacherInterventionDraft, type WorkSubmission } from "../lib/api";
+import type { AiMessage, Announcement, ChatMessage, HistoryStatus, StudentCourse } from "./student/chatTypes";
+import { renderText } from "./student/renderText";
 import { useScopedQuery, useScopedRequest } from "./useScopedRequest";
 import { clearStudentSession, readQuizDraft, readStudentLocation, writeQuizDraft, writeStudentLocation } from "../lib/studentSession";
 
 const CitationPreview = lazy(() => import("./components/CitationPreview"));
+const AskWorkspace = lazy(() => import("./student/AskWorkspace"));
 
 // ─── Types ────────────────────────────────────────────────────────────────
 
@@ -32,17 +35,8 @@ type View = "landing" | "auth" | "teacher" | "student" | "admin";
 type TeacherTab = "overview" | "students" | "analytics" | "materials" | "settings";
 type StudentTab = "workspace" | "work" | "lab" | "quiz" | "progress" | "enroll" | "settings";
 const STUDENT_TABS: readonly string[] = ["workspace", "work", "lab", "quiz", "progress", "enroll", "settings"];
-type HistoryStatus = "loading" | "ready" | "error";
 type InterventionQueueItem = Awaited<ReturnType<typeof api.teacherCourseAnalytics>>["intervention_queue"][number];
 
-type Announcement = {
-  id: string;
-  title: string;
-  body: string;
-  course: string;
-  createdAt: string;
-  pinned: boolean;
-};
 
 type MisconceptionEntry = {
   id: number;
@@ -62,16 +56,6 @@ type QuizAttempt = {
   total: number;
   duration: string;
 };
-type UserMessage = { role: "user"; text: string };
-type AiMessage = {
-  role: "ai";
-  text: string;
-  citations: Array<string | SourceCitation>;
-  misconception: string | null;
-  question?: string;
-  formatLabel?: string;
-};
-type ChatMessage = UserMessage | AiMessage;
 
 function initialsFor(name?: string | null): string {
   if (!name) return "?";
@@ -314,13 +298,6 @@ const courseFromRow = (row: CourseRow): TeacherCourse => ({
   created_at: row.created_at,
 });
 
-type StudentCourse = {
-  id: string;
-  name: string;
-  code: string;
-  teacher: string;
-  progress: number;
-};
 
 const INITIAL_ANNOUNCEMENTS: Announcement[] = [
   { id: "demo-1", title: "Midterm exam — Chapter 10–14 in scope", body: "The midterm on July 18 will cover all material from Chapters 10 through 14.", course: "Biology 101", createdAt: "2h ago", pinned: true },
@@ -358,17 +335,6 @@ function barColor(p: number) {
   if (p >= 80) return "bg-emerald-500";
   if (p >= 60) return "bg-amber-500";
   return "bg-red-500";
-}
-
-function renderText(text: string) {
-  return text.split("\n").map((line, i) => {
-    return line
-      ? <p key={i} className="mb-1 last:mb-0">{line.split(/(\*\*[^*]+\*\*)/g).map((part, index) =>
-          part.startsWith("**") && part.endsWith("**")
-            ? <strong key={index}>{part.slice(2, -2)}</strong>
-            : <React.Fragment key={index}>{part}</React.Fragment>)}</p>
-      : <br key={i} />;
-  });
 }
 
 function CourseCitationList({ courseId, citations, darkMode }: {
@@ -3613,8 +3579,8 @@ function StudentDashboard({ onLogout, darkMode, setDarkMode }: { onLogout: () =>
         items={navItems} activeTab={tab} setTab={setTab} onLogout={onLogout} open={sidebarOpen} setOpen={setSidebarOpen}
         extra={courseExtra} />
       <div className="flex-1 min-w-0 lg:ml-64 flex flex-col min-h-screen">
-        <header className="sticky top-0 z-20 bg-background/95 backdrop-blur-sm border-b border-border h-14 flex items-center px-6 gap-4">
-          <button className="lg:hidden" onClick={() => setSidebarOpen(true)}><Menu size={20} /></button>
+        <header className={`sticky top-0 z-20 backdrop-blur-sm border-b h-14 flex items-center px-6 gap-4 ${tab === "workspace" ? "eb-stage-header" : "bg-background/95 border-border"}`}>
+          <button className="lg:hidden" aria-label="Open menu" onClick={() => setSidebarOpen(true)}><Menu size={20} /></button>
           <h1 className="font-semibold text-foreground text-sm">
             {tab === "workspace" && `Course Q&A${selectedCourse ? ` — ${selectedCourse.name}` : ""}`}
             {tab === "work" && "Show Your Work"}
@@ -3650,7 +3616,7 @@ function StudentDashboard({ onLogout, darkMode, setDarkMode }: { onLogout: () =>
             <motion.div key={tab} initial={{ opacity: 0, y: 6 }} animate={{ opacity: 1, y: 0 }} exit={{ opacity: 0, y: -6 }}
               transition={{ duration: 0.18, ease: "easeOut" }} className="h-full"
             >
-              {tab === "workspace" && selectedCourse && <StudentWorkspace messages={messages} isTyping={isTyping} tutorStatus={tutorStatus} historyStatus={historyStatus} onRetryHistory={() => void restoreHistory()} input={input} setInput={setInput} onSend={() => void handleSend()} onExplain={(index, format) => void handleAlternativeExplanation(index, format)} announcements={courseAnnouncements ?? []} course={selectedCourse} darkMode={darkMode} />}
+              {tab === "workspace" && selectedCourse && <Suspense fallback={<div role="status" className="eb-stage h-[calc(100vh-3.5rem)] p-10 text-sm text-[#A9B6C2]">Opening Q&amp;A…</div>}><AskWorkspace messages={messages} isTyping={isTyping} tutorStatus={tutorStatus} historyStatus={historyStatus} onRetryHistory={() => void restoreHistory()} input={input} setInput={setInput} onSend={() => void handleSend()} onExplain={(index, format) => void handleAlternativeExplanation(index, format)} announcements={courseAnnouncements ?? []} course={selectedCourse} /></Suspense>}
               {tab === "work" && selectedCourse && session && <StudentShowWork courseId={selectedCourse.id} courseName={selectedCourse.name} accessToken={session.access_token} />}
               {tab === "work" && !selectedCourse && <div className="p-8 text-sm text-muted-foreground">Join an approved course before submitting work.</div>}
               {tab === "lab" && selectedCourse && session && <StudentConceptLab courseId={selectedCourse.id} courseName={selectedCourse.name} accessToken={session.access_token} />}
@@ -3672,155 +3638,6 @@ function StudentDashboard({ onLogout, darkMode, setDarkMode }: { onLogout: () =>
         onNavigate={navigateStudentNotification}
         accessToken={session?.access_token ?? ""}
       />
-    </div>
-  );
-}
-
-function StudentWorkspace({ messages, isTyping, tutorStatus, historyStatus, onRetryHistory, input, setInput, onSend, onExplain, announcements, course, darkMode }: {
-  messages: ChatMessage[]; isTyping: boolean; tutorStatus: string; input: string;
-  historyStatus: HistoryStatus; onRetryHistory: () => void;
-  setInput: (v: string) => void; onSend: () => void;
-  onExplain: (messageIndex: number, format: ExplanationFormat) => void;
-  announcements: Announcement[]; course: StudentCourse; darkMode: boolean;
-}) {
-  const bottomRef = useRef<HTMLDivElement>(null);
-  const [dismissedIds, setDismissedIds] = useState<string[]>([]);
-  const [formatMenu, setFormatMenu] = useState<number | null>(null);
-  useEffect(() => { bottomRef.current?.scrollIntoView({ behavior: "smooth" }); }, [messages, isTyping]);
-
-  const listen = (text: string) => {
-    if (!("speechSynthesis" in window)) {
-      toast.error("Audio playback is not supported in this browser.");
-      return;
-    }
-    window.speechSynthesis.cancel();
-    const speech = new SpeechSynthesisUtterance(text);
-    speech.rate = 0.95;
-    window.speechSynthesis.speak(speech);
-  };
-
-  const pinned = announcements.filter(a => a.pinned && !dismissedIds.includes(a.id));
-
-  return (
-    <div className="h-[calc(100vh-3.5rem)] flex flex-col">
-      {/* Pinned announcements */}
-      <AnimatePresence initial={false}>
-        {pinned.map(a => (
-          <motion.div key={a.id} initial={{ height: 0, opacity: 0 }} animate={{ height: "auto", opacity: 1 }} exit={{ height: 0, opacity: 0 }} transition={{ duration: 0.2 }}
-            className="overflow-hidden"
-          >
-            <div className="flex items-start gap-3 px-5 py-3 bg-accent/10 border-b border-accent/20">
-              <div className="w-5 h-5 rounded-full bg-accent/20 flex items-center justify-center shrink-0 mt-0.5">
-                <Star size={10} className="text-accent" />
-              </div>
-              <div className="flex-1 min-w-0">
-                <span className="text-xs font-semibold text-foreground">{a.title}</span>
-                <span className="text-xs text-muted-foreground font-light ml-2">{a.body.slice(0, 80)}{a.body.length > 80 ? "…" : ""}</span>
-              </div>
-              <button onClick={() => setDismissedIds(p => [...p, a.id])} className="text-muted-foreground hover:text-foreground p-0.5 shrink-0">
-                <X size={12} />
-              </button>
-            </div>
-          </motion.div>
-        ))}
-      </AnimatePresence>
-      <div className="flex-1 overflow-y-auto p-6 space-y-5">
-        {historyStatus === "loading" && <p role="status" className="text-sm text-muted-foreground">Restoring your conversation…</p>}
-        {historyStatus === "error" && <div role="status" className="flex flex-wrap items-center gap-3 text-sm text-muted-foreground">
-          <span>Could not restore your conversation.</span>
-          <button type="button" onClick={onRetryHistory} className="rounded-lg border border-border px-3 py-1.5 font-medium text-foreground hover:bg-muted">Try again</button>
-        </div>}
-        {messages.map((msg, i) => (
-          <div key={i} className={`flex gap-3 ${msg.role === "user" ? "flex-row-reverse" : ""}`}>
-            {msg.role === "ai" && (
-              <div className="w-7 h-7 rounded-full bg-primary flex items-center justify-center shrink-0 mt-1 shadow-sm">
-                <Brain size={13} className="text-primary-foreground" />
-              </div>
-            )}
-            <div className={`max-w-[520px] ${msg.role === "user" ? "items-end flex flex-col" : ""}`}>
-              <div className={`rounded-xl px-4 py-3 text-sm leading-relaxed shadow-sm ${msg.role === "user" ? "bg-primary text-primary-foreground" : "bg-card border border-border text-foreground"}`}>
-                {msg.role === "ai" && (msg as AiMessage).formatLabel && <div className="text-[10px] font-semibold uppercase tracking-wide text-primary mb-2">{(msg as AiMessage).formatLabel}</div>}
-                {renderText(msg.text)}
-              </div>
-              {msg.role === "ai" && (msg as AiMessage).misconception && (
-                <div className="mt-2 flex items-start gap-2 text-xs text-amber-800 bg-amber-50 border border-amber-200 rounded-lg px-3 py-2">
-                  <AlertCircle size={13} className="shrink-0 mt-0.5" />
-                  <div><span className="font-semibold">Helpful distinction: </span>{(msg as AiMessage).misconception}</div>
-                </div>
-              )}
-              {msg.role === "ai" && msg.citations.length > 0 && (
-                <div className="mt-3">
-                  <div className="text-[11px] font-semibold uppercase tracking-wide text-muted-foreground mb-1.5">Read more in your course</div>
-                  <CourseCitationList courseId={course.id} citations={msg.citations} darkMode={darkMode} />
-                </div>
-              )}
-              {msg.role === "ai" && (msg as AiMessage).question && (
-                <div className="mt-2 relative flex flex-wrap items-center gap-2">
-                  <button
-                    type="button"
-                    onClick={() => setFormatMenu(current => current === i ? null : i)}
-                    disabled={isTyping}
-                    className="inline-flex items-center gap-1.5 rounded-lg border border-border bg-card px-2.5 py-1.5 text-[11px] font-semibold text-foreground hover:bg-muted disabled:opacity-40"
-                  >
-                    <Sparkles size={12} className="text-primary" />Explain another way
-                  </button>
-                  <button
-                    type="button"
-                    onClick={() => listen(msg.text)}
-                    className="inline-flex items-center gap-1.5 rounded-lg border border-border bg-card px-2.5 py-1.5 text-[11px] font-semibold text-foreground hover:bg-muted"
-                  >
-                    <Volume2 size={12} className="text-primary" />Listen
-                  </button>
-                  {formatMenu === i && (
-                    <div className="w-full flex flex-wrap gap-1.5 rounded-xl border border-border bg-card p-2 shadow-sm">
-                      {([
-                        ["simpler", "Simpler"],
-                        ["analogy", "Use an analogy"],
-                        ["worked_example", "Worked example"],
-                        ["visual_outline", "Visual outline"],
-                      ] as Array<[ExplanationFormat, string]>).map(([format, label]) => (
-                        <button key={format} type="button" onClick={() => { setFormatMenu(null); onExplain(i, format); }} className="rounded-lg bg-muted px-2.5 py-1.5 text-[11px] font-medium text-foreground hover:bg-primary hover:text-primary-foreground transition-colors">
-                          {label}
-                        </button>
-                      ))}
-                      <span className="self-center ml-auto text-[10px] text-muted-foreground">Generated only when selected</span>
-                    </div>
-                  )}
-                </div>
-              )}
-            </div>
-          </div>
-        ))}
-        {isTyping && (
-          <div className="flex gap-3">
-            <div className="w-7 h-7 rounded-full bg-primary flex items-center justify-center shrink-0 mt-1">
-              <Brain size={13} className="text-primary-foreground" />
-            </div>
-            <div className="bg-card border border-border rounded-xl px-4 py-2.5 shadow-sm flex items-center gap-3">
-              <TypingIndicator />
-              <span className="text-xs text-muted-foreground">{tutorStatus}</span>
-            </div>
-          </div>
-        )}
-        <div ref={bottomRef} />
-      </div>
-      <div className="border-t border-border p-4 bg-background/95 backdrop-blur-sm">
-        <div className="max-w-3xl mx-auto flex gap-3">
-          <input value={input} onChange={e => setInput(e.target.value)}
-            onKeyDown={e => e.key === "Enter" && !e.shiftKey && onSend()}
-            placeholder={`Ask a question about your ${course.name} material...`}
-            className="flex-1 border border-border rounded-xl px-4 py-2.5 text-sm bg-card focus:outline-none focus:ring-2 focus:ring-ring shadow-sm"
-          />
-          <motion.button whileHover={{ scale: 1.04 }} whileTap={{ scale: 0.93 }}
-            onClick={onSend} disabled={!input.trim() || isTyping || historyStatus !== "ready"}
-            aria-label="Send question"
-            className="bg-primary text-primary-foreground px-4 py-2.5 rounded-xl disabled:opacity-35 shadow-sm"
-          >
-            <Send size={15} />
-          </motion.button>
-        </div>
-        <p className="text-center text-xs text-muted-foreground mt-2 font-mono">Answers grounded in your course material only</p>
-      </div>
     </div>
   );
 }
