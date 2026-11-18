@@ -26,6 +26,18 @@ const MOTES = [
   { left: "54%", top: "44%", size: 2, duration: "9.5s", delay: "2.2s" },
 ];
 
+/** Concept names sometimes arrive as internal ids (snake_case); show them as words. */
+export function friendlyConcept(name: string) {
+  if (!name.includes("_") || /\s/.test(name)) return name;
+  const words = name.replace(/_+/g, " ").trim();
+  return words.charAt(0).toUpperCase() + words.slice(1);
+}
+
+const SOURCE_ORDER: Record<QueueItem["source"], number> = {
+  retention: 0, misconception: 1, prerequisite_gap: 2, confidence_gap: 3, study_plan: 4,
+};
+const VISIBLE_TABS = 6;
+
 function firstName(name: string) {
   return name.trim().split(/\s+/)[0] || name;
 }
@@ -76,7 +88,7 @@ function itemLocation(item: QueueItem) {
 type StudentGroup = { studentId: string; student: string; items: QueueItem[] };
 
 function listConcepts(items: QueueItem[]) {
-  const names = [...new Set(items.map(item => item.concept))];
+  const names = [...new Set(items.map(item => friendlyConcept(item.concept)))];
   if (names.length <= 2) return names.join(" and ");
   return `${names.slice(0, 2).join(", ")} and ${names.length - 2} more`;
 }
@@ -116,7 +128,7 @@ function CorrectingPassage({ courseId, item }: { courseId: string; item: QueueIt
       <span className="text-[13px] text-[var(--eb-ink-faint)]">
         {citation ? `${shortTitle(citation.document_title)}${location ? `, ${location.toLowerCase()}` : ""}` : "What the course says"}
       </span>
-      <span className="eb-serif text-[21px] font-medium">{item.concept}</span>
+      <span className="eb-serif text-[21px] font-medium">{friendlyConcept(item.concept)}</span>
       {excerpt === "none" && (
         <p className="m-0 text-[15px] text-[var(--eb-ink-muted)]">
           {item.citations.length > 0
@@ -162,7 +174,9 @@ export default function TodayStage({ courseId, analytics, loading, accessToken, 
   const [concept, setConcept] = useState<string | null>(null);
   const [resolvedIds, setResolvedIds] = useState<string[]>([]);
   const [resolvingId, setResolvingId] = useState<string | null>(null);
+  const [showAllTabs, setShowAllTabs] = useState(false);
 
+  useEffect(() => { setShowAllTabs(false); }, [selectedStudent]);
   useEffect(() => { setSelectedStudent(null); setSelectedItemId(null); setConcept(null); setResolvedIds([]); }, [courseId]);
 
   const isAssigned = (item: QueueItem) => item.practice_assigned || assignedIds.includes(item.id);
@@ -179,6 +193,8 @@ export default function TodayStage({ courseId, analytics, loading, accessToken, 
       group.items.push(item);
       byStudent.set(item.student_id, group);
     });
+    byStudent.forEach(entry => entry.items.sort((a, b) =>
+      SOURCE_ORDER[a.source] - SOURCE_ORDER[b.source] || Number(Boolean(b.student_evidence)) - Number(Boolean(a.student_evidence))));
     return [...byStudent.values()];
   }, [items]);
 
@@ -208,7 +224,7 @@ export default function TodayStage({ courseId, analytics, loading, accessToken, 
     try {
       await api.addressMisconception(courseId, item.misconception_id, accessToken);
       setResolvedIds(current => [...current, item.id]);
-      toast.success(`Marked ${firstName(item.student)}’s ${item.concept} flag as resolved`);
+      toast.success(`Marked ${firstName(item.student)}’s ${friendlyConcept(item.concept)} flag as resolved`);
     } catch (error) {
       toast.error(error instanceof Error ? error.message : "Could not mark this as resolved.");
     } finally {
@@ -292,7 +308,9 @@ export default function TodayStage({ courseId, analytics, loading, accessToken, 
 
                 {groupItems.length > 1 && (
                   <div role="group" aria-label={`${firstName(group.student)}’s items`} className="flex flex-wrap gap-2">
-                    {groupItems.map(item => {
+                    {(showAllTabs ? groupItems : groupItems.slice(0, VISIBLE_TABS).concat(
+                      groupItems.slice(VISIBLE_TABS).filter(item => item.id === selected.id),
+                    )).map(item => {
                       const on = item.id === selected.id;
                       return (
                         <button key={item.id} type="button" onClick={() => setSelectedItemId(item.id)} aria-pressed={on}
@@ -300,10 +318,18 @@ export default function TodayStage({ courseId, analytics, loading, accessToken, 
                             ? "border-[var(--eb-text)] bg-[var(--eb-text)] font-semibold text-[var(--eb-ink)]"
                             : `border-[var(--eb-line)] text-[var(--eb-text-soft)] hover:border-[var(--eb-text-muted)] hover:text-[var(--eb-text)]${isAssigned(item) ? " opacity-60" : ""}`}`}
                         >
-                          {item.concept}{isAssigned(item) ? ", assigned" : ""}
+                          {item.student_evidence && <span aria-hidden="true" className={`mr-2 inline-block h-2 w-2 rounded-full align-middle ${on ? "bg-[#2E7D74]" : "bg-[var(--eb-student)]"}`} />}
+                          {friendlyConcept(item.concept)}{isAssigned(item) ? ", assigned" : ""}
+                          {item.student_evidence && <span className="sr-only">, has the student’s own words</span>}
                         </button>
                       );
                     })}
+                    {!showAllTabs && groupItems.length > VISIBLE_TABS && (
+                      <button type="button" onClick={() => setShowAllTabs(true)}
+                        className="min-h-10 px-2 text-sm text-[var(--eb-text-soft)] underline underline-offset-4 hover:text-[var(--eb-text)]">
+                        Show {groupItems.length - VISIBLE_TABS} more
+                      </button>
+                    )}
                   </div>
                 )}
 
@@ -319,7 +345,7 @@ export default function TodayStage({ courseId, analytics, loading, accessToken, 
                       </>
                     ) : (
                       <>
-                        <span className="text-[19px] font-semibold">{selected.concept}</span>
+                        <span className="text-[19px] font-semibold">{friendlyConcept(selected.concept)}</span>
                         <p className="m-0 max-w-[60ch] text-[16px] leading-[1.55] text-[var(--eb-text-soft)]">{selected.reason}</p>
                       </>
                     )}
@@ -338,13 +364,13 @@ export default function TodayStage({ courseId, analytics, loading, accessToken, 
                   {isAssigned(selected) ? (
                     <div role="status" className="eb-rise flex flex-wrap items-center gap-3">
                       <span aria-hidden="true" className="flex h-[26px] w-[26px] items-center justify-center rounded-full bg-[#A7DDD6] text-[var(--eb-ink)]"><Check size={14} strokeWidth={3} /></span>
-                      <span>Practice on {selected.concept} is assigned to {firstName(group.student)}.</span>
+                      <span>Practice on {friendlyConcept(selected.concept)} is assigned to {firstName(group.student)}.</span>
                     </div>
                   ) : (
                     <div className="flex flex-wrap gap-2.5">
                       <button type="button" onClick={() => onAssign(selected)} disabled={assigningId === selected.id}
                         className="min-h-[46px] rounded-[10px] bg-[var(--eb-light)] px-[18px] font-bold text-[var(--eb-ink)] shadow-[0_0_28px_var(--eb-light-glow)] disabled:opacity-60">
-                        {assigningId === selected.id ? "Assigning…" : `Assign practice on ${selected.concept}`}
+                        {assigningId === selected.id ? "Assigning…" : `Assign practice to ${firstName(group.student)}`}
                       </button>
                       <button type="button" onClick={() => onDraft(selected)}
                         className="inline-flex min-h-[46px] items-center gap-2 rounded-[10px] border border-[#44525F] px-4 text-[var(--eb-text)] hover:bg-[var(--eb-raised)]">
@@ -365,7 +391,7 @@ export default function TodayStage({ courseId, analytics, loading, accessToken, 
         </div>
       )}
 
-      {concepts.length > 0 && (
+      {concepts.length > 0 && groups.length >= 2 && (
         <div className="mt-8 flex flex-col gap-3">
           <div className="flex flex-wrap items-baseline justify-between gap-3">
             <h2 className="m-0 text-lg font-semibold">By concept</h2>
@@ -385,7 +411,7 @@ export default function TodayStage({ courseId, analytics, loading, accessToken, 
                     : "border-[var(--eb-line-soft)] bg-[#1A2430] hover:bg-[var(--eb-raised-2)]"}`}
                 >
                   <span className="flex justify-between gap-2.5">
-                    <span className="font-semibold">{entry.name}</span>
+                    <span className="font-semibold">{friendlyConcept(entry.name)}</span>
                     <span className="whitespace-nowrap text-sm text-[var(--eb-text-soft)]">{entry.students.size} student{entry.students.size === 1 ? "" : "s"}</span>
                   </span>
                   <span aria-hidden="true" className="block h-1.5 overflow-hidden rounded-[3px] bg-[var(--eb-line-soft)]">
