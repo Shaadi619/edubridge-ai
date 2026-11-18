@@ -30,6 +30,7 @@ const CitationPreview = lazy(() => import("./components/CitationPreview"));
 const AskWorkspace = lazy(() => import("./student/AskWorkspace"));
 const TodayStage = lazy(() => import("./teacher/TodayStage"));
 const QuizStage = lazy(() => import("./student/QuizStage"));
+const ProgressStage = lazy(() => import("./student/ProgressStage"));
 
 // ─── Types ────────────────────────────────────────────────────────────────
 
@@ -3529,7 +3530,7 @@ function StudentDashboard({ onLogout, darkMode, setDarkMode }: { onLogout: () =>
         items={navItems} activeTab={tab} setTab={setTab} onLogout={onLogout} open={sidebarOpen} setOpen={setSidebarOpen}
         extra={courseExtra} />
       <div className="flex-1 min-w-0 lg:ml-64 flex flex-col min-h-screen">
-        <header className={`sticky top-0 z-20 backdrop-blur-sm border-b h-14 flex items-center px-6 gap-4 ${tab === "workspace" || tab === "quiz" ? "eb-stage-header" : "bg-background/95 border-border"}`}>
+        <header className={`sticky top-0 z-20 backdrop-blur-sm border-b h-14 flex items-center px-6 gap-4 ${tab === "workspace" || tab === "quiz" || tab === "progress" ? "eb-stage-header" : "bg-background/95 border-border"}`}>
           <button className="lg:hidden" aria-label="Open menu" onClick={() => setSidebarOpen(true)}><Menu size={20} /></button>
           <h1 className="font-semibold text-foreground text-sm">
             {tab === "workspace" && `Course Q&A${selectedCourse ? ` — ${selectedCourse.name}` : ""}`}
@@ -3574,7 +3575,15 @@ function StudentDashboard({ onLogout, darkMode, setDarkMode }: { onLogout: () =>
               {tab === "lab" && selectedCourse && session && <StudentConceptLab courseId={selectedCourse.id} courseName={selectedCourse.name} accessToken={session.access_token} />}
               {tab === "lab" && !selectedCourse && <div className="p-8 text-sm text-muted-foreground">Join an approved course before opening the Concept Lab.</div>}
               {tab === "quiz" && !selectedCourse && <div role="status" className="p-8 text-sm text-muted-foreground">{courseStatus ?? "Join an approved course before generating a quiz."}</div>}
-              {tab === "progress" && selectedCourse && session && <StudentProgress courseId={selectedCourse.id} courseName={selectedCourse.name} accessToken={session.access_token} onGoQuiz={() => { setPracticeConcept(null); setTab("quiz"); }} onPractice={concept => { setPracticeConcept(concept); setTab("quiz"); }} />}
+              {tab === "progress" && selectedCourse && session && <Suspense fallback={<div role="status" className="eb-stage min-h-[calc(100vh-3.5rem)] p-10 text-sm text-[#A9B6C2]">Opening your progress…</div>}>
+                <ProgressStage courseId={selectedCourse.id} courseName={selectedCourse.name} accessToken={session.access_token}
+                  onGoQuiz={() => { setPracticeConcept(null); setTab("quiz"); }}
+                  onPractice={concept => { setPracticeConcept(concept); setTab("quiz"); }}
+                  renderCheck={({ misconception, mode, onClose, onComplete }) => (
+                    <TeachBackModal courseId={selectedCourse.id} courseName={selectedCourse.name} misconception={misconception}
+                      mode={mode} accessToken={session.access_token} onClose={onClose} onComplete={onComplete} />
+                  )} />
+              </Suspense>}
               {tab === "enroll" && <StudentEnroll courses={studentCourses} />}
               {tab === "settings" && <StudentSettings courses={studentCourses} darkMode={darkMode} setDarkMode={setDarkMode} />}
             </motion.div>
@@ -3819,305 +3828,6 @@ const QUIZ_QUESTIONS = [
     explanation: "**Semi-conservative** means each new double helix retains one original (parental) strand and one newly synthesized strand. This was confirmed by the Meselson-Stahl experiment using nitrogen isotope labeling.",
   },
 ];
-
-function StudentProgress({ courseId, courseName, accessToken, onGoQuiz, onPractice }: { courseId: string; courseName: string; accessToken: string; onGoQuiz: () => void; onPractice: (concept: string) => void }) {
-  type ProgressData = Awaited<ReturnType<typeof api.courseProgress>>;
-  type MasteryData = Awaited<ReturnType<typeof api.conceptMastery>>;
-  type MisconceptionData = Awaited<ReturnType<typeof api.myMisconceptions>>;
-  const [progress, setProgress] = useState<ProgressData | null>(null);
-  const [mastery, setMastery] = useState<MasteryData>([]);
-  const [misconceptions, setMisconceptions] = useState<MisconceptionData>([]);
-  const [activeMisconception, setActiveMisconception] = useState<MisconceptionData[number] | null>(null);
-  const [checkMode, setCheckMode] = useState<"teach-back" | "retention">("teach-back");
-  const [loading, setLoading] = useState(true);
-  type StudyPlan = Awaited<ReturnType<typeof api.studyPlan>>;
-  const [planItems, setPlanItems] = useState<StudyPlan>([]);
-  const doneCount = planItems.filter(item => item.status === "completed").length;
-
-  useEffect(() => {
-    setLoading(true);
-    void Promise.all([
-      api.courseProgress(courseId, accessToken),
-      api.conceptMastery(courseId, accessToken),
-      api.myMisconceptions(courseId, accessToken),
-      api.studyPlan(courseId, accessToken),
-    ]).then(([data, conceptRows, misconceptionRows, studyPlan]) => {
-      setProgress(data);
-      setMastery(conceptRows);
-      setMisconceptions(misconceptionRows);
-      setPlanItems(studyPlan);
-    }).catch(error => toast.error(error instanceof Error ? error.message : "Could not load progress.")).finally(() => setLoading(false));
-  }, [courseId, accessToken]);
-
-  const toggleDone = async (id: string) => {
-    const item = planItems.find(plan => plan.id === id);
-    if (!item) return;
-    const completed = item.status !== "completed";
-    setPlanItems(previous => previous.map(plan => plan.id === id ? { ...plan, status: completed ? "completed" : "pending", completed_at: completed ? new Date().toISOString() : null } : plan));
-    try {
-      await api.updateStudyPlanItem(courseId, id, completed, accessToken);
-    } catch (error) {
-      setPlanItems(previous => previous.map(plan => plan.id === id ? item : plan));
-      toast.error(error instanceof Error ? error.message : "Could not update your study plan.");
-    }
-  };
-
-  const refreshLearningEvidence = async () => {
-    const [conceptRows, misconceptionRows] = await Promise.all([
-      api.conceptMastery(courseId, accessToken),
-      api.myMisconceptions(courseId, accessToken),
-    ]);
-    setMastery(conceptRows);
-    setMisconceptions(misconceptionRows);
-  };
-
-  const priorityStyle = (priority: "high" | "medium" | "low") =>
-    priority === "high" ? "bg-red-100 text-red-700 border-red-200" : priority === "medium" ? "bg-amber-100 text-amber-700 border-amber-200" : "bg-blue-100 text-blue-700 border-blue-200";
-  if (loading) return <div className="p-8 max-w-4xl mx-auto"><div className="bg-card border border-border rounded-xl p-6 flex items-center gap-3"><TypingIndicator /><span className="text-sm text-muted-foreground">Loading your progress…</span></div></div>;
-  if (!progress) return <div className="p-8 text-sm text-muted-foreground">Progress is currently unavailable.</div>;
-  const topicData = progress.topic_scores.map(row => ({ subject: row.topic, score: row.score }));
-  const masteryStyle = (status: MasteryData[number]["status"]) => {
-    if (status === "strong") return { label: "Strong", color: "text-emerald-700 bg-emerald-50 border-emerald-200", bar: "bg-emerald-500" };
-    if (status === "developing") return { label: "Developing", color: "text-blue-700 bg-blue-50 border-blue-200", bar: "bg-blue-500" };
-    if (status === "verified_once") return { label: "Verified Once", color: "text-emerald-700 bg-emerald-50 border-emerald-200", bar: "bg-emerald-400" };
-    if (status === "needs_review") return { label: "Needs Review", color: "text-amber-700 bg-amber-50 border-amber-200", bar: "bg-amber-500" };
-    return { label: "Not Started", color: "text-muted-foreground bg-muted border-border", bar: "bg-muted-foreground/30" };
-  };
-
-  return (
-    <div className="p-6 lg:p-8 max-w-4xl mx-auto">
-      <div className="mb-8">
-        <h1 className="font-display text-2xl text-primary">My Progress</h1>
-        <p className="text-sm text-muted-foreground mt-1 font-light">{courseName} — results from your completed quizzes</p>
-      </div>
-
-      {/* Stats row */}
-      <div className="grid grid-cols-2 sm:grid-cols-4 gap-4 mb-7">
-        {[
-          { label: "Average Score", val: `${progress.average_score}%`, icon: Award, color: "text-emerald-600", bg: "bg-emerald-50" },
-          { label: "Quizzes Taken", val: String(progress.quiz_count), icon: Target, color: "text-blue-600", bg: "bg-blue-50" },
-          { label: "Best Score", val: `${progress.best_score}%`, icon: TrendingUp, color: "text-purple-600", bg: "bg-purple-50" },
-          { label: "Weak Topics", val: String(progress.weak_topics.length), icon: AlertCircle, color: "text-amber-600", bg: "bg-amber-50" },
-        ].map(s => (
-          <motion.div key={s.label} whileHover={{ y: -2, boxShadow: "0 4px 16px rgba(0,0,0,0.07)" }}
-            className="bg-card border border-border rounded-xl p-4 text-center shadow-sm cursor-default"
-          >
-            <div className={`w-9 h-9 ${s.bg} rounded-xl flex items-center justify-center mx-auto mb-2.5`}>
-              <s.icon size={18} className={s.color} />
-            </div>
-            <div className="font-display text-2xl text-primary">{s.val}</div>
-            <div className="text-xs text-muted-foreground mt-0.5 font-light">{s.label}</div>
-          </motion.div>
-        ))}
-      </div>
-
-      {/* Persistent concept profile */}
-      <div className="bg-card border border-border rounded-xl p-6 shadow-sm mb-6">
-        <div className="flex items-start justify-between gap-4 mb-5">
-          <div>
-            <h2 className="font-semibold text-foreground">My Concept Profile</h2>
-            <p className="text-xs text-muted-foreground mt-1 font-light">Built from quiz answers and misconception evidence. No additional AI tokens are used.</p>
-          </div>
-          <span className="text-xs font-mono text-muted-foreground shrink-0">{mastery.length} concepts</span>
-        </div>
-        {mastery.length ? (
-          <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
-            {mastery.map(item => {
-              const style = masteryStyle(item.status);
-              return (
-                <div key={item.concept} className={`border rounded-xl p-4 ${item.review_due ? "ring-2 ring-amber-200" : "border-border"}`}>
-                  <div className="flex items-start justify-between gap-3 mb-3">
-                    <div className="text-sm font-semibold text-foreground leading-snug">{item.concept}</div>
-                    <span className={`text-[10px] font-semibold border rounded-full px-2 py-0.5 shrink-0 ${style.color}`}>{style.label}</span>
-                  </div>
-                  <div className="flex items-center gap-3 mb-2">
-                    <div className="h-1.5 bg-muted rounded-full overflow-hidden flex-1">
-                      <div className={`h-full rounded-full ${style.bar}`} style={{ width: `${item.mastery_score ?? 0}%` }} />
-                    </div>
-                    <span className="text-xs font-mono text-muted-foreground min-w-9 text-right">{item.mastery_score === null ? "—" : `${Math.round(item.mastery_score)}%`}</span>
-                  </div>
-                  {!item.evidence_sufficient && <div className="text-[10px] text-muted-foreground mb-2">Not enough evidence for a reliable percentage yet.</div>}
-                  <div className="flex flex-wrap gap-x-3 gap-y-1 text-[10px] text-muted-foreground font-mono">
-                    <span>{item.correct_answers}/{item.total_answers} quiz answers</span>
-                    <span>{item.completed_teach_backs} teach-back {item.completed_teach_backs === 1 ? "check" : "checks"}</span>
-                    <span>{Math.round(item.confidence * 100)}% evidence confidence</span>
-                    {item.open_misconceptions > 0 && <span className="text-amber-700">{item.open_misconceptions} open misconception{item.open_misconceptions === 1 ? "" : "s"}</span>}
-                    {item.review_due && <span className="text-amber-700 font-semibold">Review due</span>}
-                  </div>
-                </div>
-              );
-            })}
-          </div>
-        ) : (
-          <div className="border border-dashed border-border rounded-xl p-6 text-center text-sm text-muted-foreground">
-            Complete a quiz or use Course Q&amp;A to begin building your concept profile.
-          </div>
-        )}
-      </div>
-
-      {/* Teach-back verification */}
-      {misconceptions.length > 0 && (
-        <div className="bg-card border border-border rounded-xl p-6 shadow-sm mb-6">
-          <div className="flex items-start justify-between gap-4 mb-5">
-            <div>
-              <h2 className="font-semibold text-foreground">Check My Understanding</h2>
-              <p className="text-xs text-muted-foreground mt-1 font-light">Explain a flagged concept in your own words to verify that the distinction is now clear.</p>
-            </div>
-            <Brain size={18} className="text-purple-500 shrink-0" />
-          </div>
-          <div className="space-y-3">
-            {misconceptions.map(item => {
-              const retentionDue = item.retention_status === "due" || Boolean(item.retention_due_at && new Date(item.retention_due_at) <= new Date());
-              const retained = item.retention_status === "retained";
-              return (
-              <div key={item.id} className="flex items-center gap-4 border border-border rounded-xl p-4">
-                <div className="flex-1 min-w-0">
-                  <div className="flex items-center gap-2 mb-1">
-                    <span className="text-sm font-semibold text-foreground">{item.concept}</span>
-                    <span className={`text-[10px] font-semibold px-2 py-0.5 rounded-full ${retained ? "bg-purple-50 text-purple-700" : item.learning_status === "verified" ? "bg-emerald-50 text-emerald-700" : item.learning_status === "improving" ? "bg-blue-50 text-blue-700" : "bg-amber-50 text-amber-700"}`}>
-                      {retained ? "Retained" : item.learning_status === "verified" ? retentionDue ? "Retention check due" : "Verified" : item.learning_status === "improving" ? "Improving" : "Ready to check"}
-                    </span>
-                  </div>
-                  <p className="text-xs text-muted-foreground line-clamp-2">{item.explanation}</p>
-                </div>
-                {item.learning_status !== "verified" ? (
-                  <button onClick={() => { setCheckMode("teach-back"); setActiveMisconception(item); }} className="bg-primary text-primary-foreground rounded-lg px-3 py-2 text-xs font-semibold shrink-0">
-                    Check understanding
-                  </button>
-                ) : retained ? <CheckCheck size={18} className="text-purple-500 shrink-0" /> : retentionDue ? (
-                  <button onClick={() => { setCheckMode("retention"); setActiveMisconception(item); }} className="bg-purple-600 text-white rounded-lg px-3 py-2 text-xs font-semibold shrink-0">
-                    Check retention
-                  </button>
-                ) : <div className="text-right shrink-0"><CheckCheck size={18} className="text-emerald-500 ml-auto" />{item.retention_due_at && <div className="text-[10px] text-muted-foreground mt-1">Due {new Date(item.retention_due_at).toLocaleDateString()}</div>}</div>}
-              </div>
-            );})}
-          </div>
-          <p className="text-[10px] text-muted-foreground mt-3">Generating and evaluating a teach-back check uses AI tokens only when you choose to start it.</p>
-        </div>
-      )}
-
-      {/* Charts row */}
-      {topicData.length > 0 ? <div className="grid grid-cols-1 lg:grid-cols-2 gap-6 mb-6">
-        <div className="bg-card border border-border rounded-xl p-6 shadow-sm">
-          <h2 className="font-semibold text-foreground mb-0.5">Topic Mastery Radar</h2>
-          <p className="text-xs text-muted-foreground font-mono mb-4 font-light">Across all covered topics</p>
-          <ResponsiveContainer width="100%" height={240}>
-            <RadarChart data={topicData} margin={{ top: 10, right: 30, bottom: 10, left: 30 }}>
-              <PolarGrid stroke="rgba(17,24,39,0.08)" />
-              <PolarAngleAxis dataKey="subject" tick={{ fontSize: 11, fill: "var(--muted-foreground)" }} />
-              <Radar name="Mastery" dataKey="score" stroke="#E8A020" fill="#E8A020" fillOpacity={0.18} strokeWidth={2} />
-            </RadarChart>
-          </ResponsiveContainer>
-        </div>
-        <div className="bg-card border border-border rounded-xl p-6 shadow-sm">
-          <h2 className="font-semibold text-foreground mb-0.5">Topic Breakdown</h2>
-          <p className="text-xs text-muted-foreground font-mono mb-5 font-light">Score per topic area</p>
-          <div className="space-y-4">
-            {topicData.map((d, i) => (
-              <div key={d.subject}>
-                <div className="flex justify-between text-xs mb-1.5">
-                  <span className="text-foreground font-medium">{d.subject}</span>
-                  <span className="font-mono text-muted-foreground tabular-nums">{d.score}%</span>
-                </div>
-                <div className="h-1.5 bg-muted rounded-full overflow-hidden">
-                  <motion.div
-                    className={`h-full rounded-full ${d.score >= 80 ? "bg-emerald-500" : d.score >= 60 ? "bg-amber-500" : "bg-red-500"}`}
-                    initial={{ width: 0 }} animate={{ width: `${d.score}%` }}
-                    transition={{ duration: 0.8, ease: "easeOut", delay: i * 0.08 }}
-                  />
-                </div>
-              </div>
-            ))}
-          </div>
-        </div>
-      </div> : <div className="bg-card border border-border rounded-xl p-8 text-center mb-6"><Target size={24} className="text-muted-foreground/40 mx-auto mb-3" /><h2 className="font-semibold text-foreground mb-1">No completed quizzes yet</h2><p className="text-sm text-muted-foreground mb-4">Complete a course-grounded quiz to start building your progress report.</p><button onClick={onGoQuiz} className="bg-primary text-primary-foreground px-4 py-2 rounded-lg text-sm">Take your first quiz</button></div>}
-
-      {/* AI Study Plan — interactive checklist */}
-      {planItems.length > 0 && <div className="bg-card border border-border rounded-xl p-6 shadow-sm">
-        <div className="flex items-center justify-between mb-1">
-          <h2 className="font-semibold text-foreground">AI Study Plan</h2>
-          <span className="text-xs font-mono text-muted-foreground">{doneCount}/{planItems.length} done</span>
-        </div>
-        <p className="text-xs text-muted-foreground font-light mb-2">Personalized recommendations based on your weak areas.</p>
-        {/* Progress bar */}
-        <div className="h-1.5 bg-muted rounded-full overflow-hidden mb-5">
-          <motion.div className="h-full bg-emerald-500 rounded-full"
-            animate={{ width: `${(doneCount / planItems.length) * 100}%` }}
-            transition={{ duration: 0.4 }} />
-        </div>
-        <div className="space-y-3">
-          {planItems.map(plan => (
-            <motion.div key={plan.id} layout
-              className={`flex gap-4 p-4 rounded-xl border transition-colors ${plan.status === "completed" ? "bg-muted/30 border-border" : "bg-muted/40 border-transparent hover:bg-muted/70"}`}>
-              <button onClick={() => void toggleDone(plan.id)} className="shrink-0 mt-0.5">
-                <div className={`w-5 h-5 rounded-full border-2 flex items-center justify-center transition-colors ${plan.status === "completed" ? "bg-emerald-500 border-emerald-500" : "border-muted-foreground/30"}`}>
-                  {plan.status === "completed" && <CheckCheck size={11} className="text-white" />}
-                </div>
-              </button>
-              <div className="flex-1 min-w-0">
-                <div className="flex items-center gap-2 flex-wrap mb-0.5">
-                  <span className={`text-xs font-semibold px-2 py-0.5 rounded-full border capitalize ${priorityStyle(plan.priority)} ${plan.status === "completed" ? "opacity-50" : ""}`}>
-                    {plan.priority}
-                  </span>
-                  <span className={`text-sm font-semibold text-foreground ${plan.status === "completed" ? "line-through opacity-40" : ""}`}>{plan.concept}</span>
-                  {plan.action.startsWith("Prerequisite first:") && <span className="text-[10px] font-semibold rounded-full bg-violet-50 text-violet-700 px-2 py-0.5">Learn this first</span>}
-                  <span className="text-xs font-mono text-muted-foreground/60 ml-auto">Due {new Date(plan.due_at).toLocaleDateString(undefined, { month: "short", day: "numeric" })}</span>
-                </div>
-                <div className={`text-xs text-muted-foreground font-light leading-relaxed ${plan.status === "completed" ? "opacity-40" : ""}`}>{plan.action}</div>
-              </div>
-              {plan.status !== "completed" && (
-                <button onClick={() => onPractice(plan.concept)} className="text-xs font-semibold text-primary hover:underline shrink-0 mt-0.5 flex items-center gap-0.5">
-                  Practice now <ChevronRight size={11} />
-                </button>
-              )}
-            </motion.div>
-          ))}
-        </div>
-      </div>}
-
-      {/* Quiz History */}
-      <div className="bg-card border border-border rounded-xl p-6 shadow-sm mt-6">
-        <div className="flex items-center justify-between mb-1">
-          <h2 className="font-semibold text-foreground">Quiz History</h2>
-          <button onClick={onGoQuiz}
-            className="text-xs font-medium text-primary hover:underline flex items-center gap-1">
-            Take a quiz <ChevronRight size={11} />
-          </button>
-        </div>
-        <p className="text-xs text-muted-foreground font-light mb-5">All past attempts — most recent first.</p>
-        <div className="space-y-0">
-          {progress.attempts.map((attempt, i) => {
-            const pct = attempt.score;
-            return (
-              <div key={attempt.id} className={`flex items-center gap-4 py-3.5 ${i < progress.attempts.length - 1 ? "border-b border-border" : ""}`}>
-                <div className={`w-9 h-9 rounded-xl flex items-center justify-center shrink-0 text-xs font-bold ${pct === 100 ? "bg-emerald-50 text-emerald-600" : pct >= 75 ? "bg-blue-50 text-blue-600" : pct >= 50 ? "bg-amber-50 text-amber-600" : "bg-red-50 text-red-600"}`}>
-                  {pct}%
-                </div>
-                <div className="flex-1 min-w-0">
-                  <div className="text-sm font-medium text-foreground truncate">{attempt.title}</div>
-                  <div className="text-xs text-muted-foreground font-light">{attempt.correct}/{attempt.total} correct</div>
-                </div>
-                <div className="text-xs font-mono text-muted-foreground/60 shrink-0">{new Date(attempt.completed_at).toLocaleDateString(undefined, { month: "short", day: "numeric" })}</div>
-              </div>
-            );
-          })}
-          {progress.attempts.length === 0 && <div className="text-sm text-muted-foreground py-4">No completed quiz attempts yet.</div>}
-        </div>
-      </div>
-      {activeMisconception && (
-        <TeachBackModal
-          courseId={courseId}
-          courseName={courseName}
-          misconception={activeMisconception}
-          mode={checkMode}
-          accessToken={accessToken}
-          onClose={() => setActiveMisconception(null)}
-          onComplete={refreshLearningEvidence}
-        />
-      )}
-    </div>
-  );
-}
 
 function TeachBackModal({ courseId, courseName, misconception, mode, accessToken, onClose, onComplete }: {
   courseId: string;
