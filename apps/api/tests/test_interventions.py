@@ -133,3 +133,48 @@ def test_prerequisite_gap_is_prioritized_in_teacher_queue() -> None:
     assert queue[0]["source"] == "prerequisite_gap"
     assert queue[0]["concept"] == "Embeddings"
     assert "Transformers" in queue[0]["reason"]
+
+
+def test_students_words_win_over_an_overdue_task_on_the_same_concept() -> None:
+    now = datetime.now(UTC)
+    queue = _intervention_queue(
+        [{
+            "id": "mis-1", "student_id": "student-1", "concept": "Transformers",
+            "student_evidence": "the same as the one from the movie",
+            "status": "open", "occurrence_count": 1, "retention_status": "not_scheduled",
+            "created_at": now.isoformat(), "last_detected_at": now.isoformat(),
+        }],
+        [{
+            "id": "plan-1", "student_id": "student-1", "concept": "Transformers",
+            "action": "Review transformers", "status": "pending",
+            "due_at": (now - timedelta(days=30)).isoformat(),
+        }],
+        {"student-1": "Sam Student"},
+        now,
+    )
+
+    assert len(queue) == 1
+    assert queue[0]["source"] == "misconception"
+    assert queue[0]["student_evidence"] == "the same as the one from the movie"
+    assert queue[0]["overdue_task"] is True
+
+
+def test_overdue_tasks_do_not_push_flags_with_student_words_out_of_the_queue() -> None:
+    now = datetime.now(UTC)
+    plans = [{
+        "id": f"plan-{index}", "student_id": "student-1", "concept": f"Topic {index}",
+        "action": "Practice", "status": "pending", "due_at": (now - timedelta(days=60 - index)).isoformat(),
+    } for index in range(30)]
+    queue = _intervention_queue(
+        [{
+            "id": "mis-1", "student_id": "student-1", "concept": "Transformers",
+            "student_evidence": "the same as the one from the movie",
+            "status": "open", "occurrence_count": 1, "retention_status": "not_scheduled",
+            "created_at": now.isoformat(), "last_detected_at": now.isoformat(),
+        }],
+        plans,
+        {"student-1": "Sam Student"},
+        now,
+    )
+
+    assert any(item["source"] == "misconception" for item in queue)

@@ -77,6 +77,9 @@ def _difficulty_instruction(mode: str) -> str:
     }.get(mode, "Use a balanced difficulty mix from 2-4, targeting weak concepts more heavily while keeping the quiz achievable.")
 
 
+QUEUE_LIMIT = 25
+
+
 def _intervention_queue(
     misconceptions: list[dict], study_plans: list[dict], names: dict[str, str], now: datetime,
     citations_by_misconception: dict[str, list[dict]] | None = None,
@@ -93,16 +96,22 @@ def _intervention_queue(
         if plan.get("status") == "pending" and str(plan.get("action", "")).startswith("Teacher assigned:")
     }
 
+    def rank(item: dict) -> tuple[int, int, int]:
+        # The student's own words are the most useful evidence for a teacher,
+        # so an item that has them wins over another item on the same concept.
+        has_words = 0 if item.get("student_evidence") else 1
+        return (has_words, priority_rank[item["priority"]], source_rank[item["source"]])
+
     def add(item: dict) -> None:
         key = (item["student_id"], concept_key(item["concept"]))
         item["practice_assigned"] = key in assigned
         current = queue.get(key)
-        if current is None or (
-            priority_rank[item["priority"]], source_rank[item["source"]]
-        ) < (
-            priority_rank[current["priority"]], source_rank[current["source"]]
-        ):
+        if current is None or rank(item) < rank(current):
+            if current is not None and current["source"] == "study_plan" and item["source"] != "study_plan":
+                item["overdue_task"] = True
             queue[key] = item
+        elif item["source"] == "study_plan" and current["source"] != "study_plan":
+            current["overdue_task"] = True
 
     for gap in prerequisite_gaps or []:
         score_text = f" Current mastery evidence is {gap['mastery_score']}%." if gap.get("evidence_count", 0) > 0 else ""
@@ -186,8 +195,10 @@ def _intervention_queue(
 
     return sorted(
         queue.values(),
-        key=lambda item: (priority_rank[item["priority"]], item.get("due_at") or ""),
-    )[:10]
+        key=lambda item: (
+            0 if item.get("student_evidence") else 1, priority_rank[item["priority"]], item.get("due_at") or "",
+        ),
+    )[:QUEUE_LIMIT]
 
 
 def _confidence_gap_records(

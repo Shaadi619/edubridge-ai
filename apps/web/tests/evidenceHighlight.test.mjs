@@ -29,3 +29,36 @@ test("lights nothing when the answer shares too little with the excerpt", () => 
   const spans = highlightEvidence(SLIDE, "Photosynthesis happens in chloroplasts.");
   assert.equal(spans.some(span => span.lit), false);
 });
+
+test("does not light a short heading even when it shares words", () => {
+  const excerpt = "Transformer and self-attention • The transformer architecture uses self-attention to capture relationships between words. "
+    + "Self-attention allows each word to look at all words in the sentence at the same time.";
+  const spans = highlightEvidence(excerpt, "Transformers read words one at a time like an RNN. Transformer self-attention");
+  const lit = spans.filter(span => span.lit).map(span => span.text);
+  assert.ok(!lit.includes("Transformer and self-attention"));
+  assert.ok(lit.includes("Self-attention allows each word to look at all words in the sentence at the same time."));
+});
+
+test("treats slide lines as separate when there are no full stops", () => {
+  const slide = "Transformer and self-attention\nThe transformer architecture uses a mechanism\ncalled self-attention to capture relationships between words\n"
+    + "Self-Attention allows each word to look at all words in the sentence at the same time";
+  assert.deepEqual(splitSentences(slide), [
+    "Transformer and self-attention",
+    "The transformer architecture uses a mechanism called self-attention to capture relationships between words",
+    "Self-Attention allows each word to look at all words in the sentence at the same time",
+  ]);
+  const lit = highlightEvidence(slide, "Transformers read words one at a time like an RNN").filter(span => span.lit).map(span => span.text);
+  assert.ok(lit.includes("Self-Attention allows each word to look at all words in the sentence at the same time"));
+  assert.ok(!lit.includes("Transformer and self-attention"));
+  assert.ok(lit.length <= 2);
+});
+
+test("splits long merged slide runs before a capitalised word", () => {
+  const run = "The transformer architecture uses a mechanism called self-attention to capture relationships between words "
+    + "Self-Attention allows each word to look at all words in the sentence at the same time, while focusing on the relevant ones";
+  assert.deepEqual(splitSentences(run), [
+    "The transformer architecture uses a mechanism called self-attention to capture relationships between words",
+    "Self-Attention allows each word to look at all words in the sentence at the same time, while focusing on the relevant ones",
+  ]);
+  assert.deepEqual(splitSentences("Short line About Names stays whole"), ["Short line About Names stays whole"]);
+});

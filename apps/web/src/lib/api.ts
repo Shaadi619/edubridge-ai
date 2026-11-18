@@ -440,6 +440,7 @@ export const api = {
         practice_assigned: boolean;
         misconception_id?: string;
         student_evidence?: string | null;
+        overdue_task?: boolean;
         citations: Array<{ document_title: string; page_number: number | null; source_kind: "page" | "slide" | "document"; chunk_id?: string }>;
       }>;
       misconception_network: {

@@ -75,7 +75,7 @@ function itemWhen(item: QueueItem) {
   switch (item.source) {
     case "study_plan": return `Overdue since ${formatDate(item.due_at)}`;
     case "retention": return `Follow-up check due ${formatDate(item.due_at)}`;
-    case "misconception": return `Flagged ${timeAgo(item.due_at)}`;
+    case "misconception": return timeAgo(item.due_at);
     default: return `Last seen ${timeAgo(item.due_at)}`;
   }
 }
@@ -118,7 +118,9 @@ function CorrectingPassage({ courseId, item }: { courseId: string; item: QueueIt
 
   const spans = useMemo(() => {
     if (excerpt === "none" || excerpt === "loading" || excerpt === "error") return [];
-    return highlightEvidence(excerpt.content, `${item.concept} ${item.recommended_action} ${item.reason}`);
+    return highlightEvidence(excerpt.content, item.student_evidence
+      ? `${item.student_evidence} ${item.concept}`
+      : `${item.concept} ${item.recommended_action} ${item.reason}`);
   }, [excerpt, item]);
   const location = citation ? citationLocation(citation.source_kind, citation.page_number) : null;
 
@@ -336,7 +338,9 @@ export default function TodayStage({ courseId, analytics, loading, accessToken, 
                 <div key={selected.id} className="flex flex-wrap items-stretch gap-5">
                   <div className={`flex min-w-0 flex-col gap-2.5 ${hasPassage ? "flex-[1_1_220px] pt-2" : "flex-1"}`}>
                     <span className="text-sm text-[var(--eb-text-muted)]">
-                      {[SOURCE_LABEL[selected.source], itemWhen(selected)].filter(Boolean).join(". ")}
+                      {selected.source === "misconception"
+                        ? [SOURCE_LABEL[selected.source], itemWhen(selected)].filter(Boolean).join(" ")
+                        : [SOURCE_LABEL[selected.source], itemWhen(selected)].filter(Boolean).join(". ")}
                     </span>
                     {selected.student_evidence ? (
                       <>
@@ -348,6 +352,9 @@ export default function TodayStage({ courseId, analytics, loading, accessToken, 
                         <span className="text-[19px] font-semibold">{friendlyConcept(selected.concept)}</span>
                         <p className="m-0 max-w-[60ch] text-[16px] leading-[1.55] text-[var(--eb-text-soft)]">{selected.reason}</p>
                       </>
+                    )}
+                    {selected.overdue_task && (
+                      <p className="m-0 text-sm text-[var(--eb-text-muted)]">There’s also an overdue study task on this topic.</p>
                     )}
                     {selected.downstream_concept && (
                       <p className="m-0 text-sm text-[var(--eb-text-muted)]">This may be holding back {selected.downstream_concept}.</p>

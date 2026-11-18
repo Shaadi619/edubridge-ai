@@ -17,6 +17,8 @@ const STOP_WORDS = new Set([
 
 const MAX_LIT = 2;
 const MIN_SHARED = 2;
+/** Headings and labels are too short to be the evidence itself. */
+const MIN_WORDS = 6;
 
 function terms(text: string): Set<string> {
   const words = text.toLowerCase().match(/[\p{L}\p{N}][\p{L}\p{N}'-]{2,}/gu) ?? [];
@@ -24,12 +26,29 @@ function terms(text: string): Set<string> {
 }
 
 export function splitSentences(text: string): string[] {
-  const flat = text.replace(/\s+/g, " ").trim();
-  if (!flat) return [];
-  return flat
-    .split(/(?<=[.!?])\s+(?=[\p{Lu}\p{N}“"(])|\s+[•▪●]\s+/u)
+  // Slide text often has no full stops: a line break before a capital letter or a
+  // bullet starts a new line of thought, while a lower-case start is a wrapped line.
+  return text
+    .split(/\n+(?=\s*[\p{Lu}\p{N}•▪●])/u)
+    .flatMap(segment => {
+      const flat = segment.replace(/\s+/g, " ").trim();
+      return flat ? flat.split(/(?<=[.!?])\s+(?=[\p{Lu}\p{N}“"(])|\s*[•▪●]\s+/u) : [];
+    })
+    .flatMap(splitMergedLines)
     .map(part => part.trim())
     .filter(Boolean);
+}
+
+const LONG_RUN_WORDS = 20;
+
+/**
+ * PDF extraction can merge two slide lines into one run with no punctuation
+ * ("…between words Self-Attention allows…"). In long runs only, start a new
+ * part where a lower-case word is followed by a capitalised word.
+ */
+function splitMergedLines(part: string): string[] {
+  if (part.split(/\s+/).length <= LONG_RUN_WORDS) return [part];
+  return part.split(/(?<=[\p{Ll}\p{N})])\s+(?=\p{Lu}\p{Ll})/u);
 }
 
 export function highlightEvidence(excerpt: string, answer: string): EvidenceSpan[] {
@@ -41,7 +60,9 @@ export function highlightEvidence(excerpt: string, answer: string): EvidenceSpan
     own.forEach(term => { if (answerTerms.has(term)) shared += 1; });
     return { index, shared, score: own.size ? shared / Math.sqrt(own.size) : 0 };
   });
-  const ranked = scored.filter(item => item.shared >= MIN_SHARED).sort((a, b) => b.score - a.score);
+  const ranked = scored
+    .filter(item => item.shared >= MIN_SHARED && sentences[item.index].split(/\s+/).length >= MIN_WORDS)
+    .sort((a, b) => b.score - a.score);
   const best = ranked[0]?.score ?? 0;
   const litIndexes = new Set(ranked.filter(item => item.score >= best * 0.75).slice(0, MAX_LIT).map(item => item.index));
   return sentences.map((text, index) => ({ text, lit: litIndexes.has(index) }));
