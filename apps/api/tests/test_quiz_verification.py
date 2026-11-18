@@ -17,7 +17,7 @@ from app.ai.contracts import (
     QuizResult,
     QuizVerificationResult,
 )
-from app.ai.quiz_verification import QuizVerificationError, generate_verified_quiz
+from app.ai.quiz_verification import QuizVerificationError, generate_verified_quiz, shuffle_verified_quiz
 from app.routers import quizzes
 
 
@@ -164,18 +164,26 @@ def test_unverified_answers_fail_after_one_refill(verdicts: list[QuizItemVerific
     assert provider.generate_structured.await_count == 4
 
 
-def test_quiz_endpoint_writes_nothing_on_verification_failure(monkeypatch) -> None:
+@pytest.mark.parametrize("verification_fails", [True, False])
+def test_quiz_endpoint_only_stores_verified_options_with_matching_key(monkeypatch, verification_fails) -> None:
     def response(payload):
         return httpx.Response(200, json=payload, request=httpx.Request("GET", "https://example.com"))
 
     client = AsyncMock()
     client.__aenter__.return_value = client
     client.get.return_value = response([])
-    client.post.return_value = response([{
-        "chunk_id": SOURCE.chunk_id, "material_id": SOURCE.document_id,
-        "material_title": SOURCE.document_title, "page_number": SOURCE.page_number,
-        "content": SOURCE.content,
-    }])
+    async def post(url, *, headers, json):
+        if url.endswith("/rpc/match_course_material_chunks"):
+            return response([{
+                "chunk_id": SOURCE.chunk_id, "material_id": SOURCE.document_id,
+                "material_title": SOURCE.document_title, "page_number": SOURCE.page_number,
+                "content": SOURCE.content,
+            }])
+        if url.endswith("/quizzes"):
+            return response([{"id": "quiz"}])
+        assert url.endswith("/quiz_questions")
+        return response([{"id": str(row["position"]), "position": row["position"]} for row in reversed(json)])
+    client.post.side_effect = post
     embedding = SimpleNamespace(embeddings=SimpleNamespace(create=AsyncMock(
         return_value=SimpleNamespace(data=[SimpleNamespace(embedding=[0.1])]),
     )))
@@ -189,13 +197,44 @@ def test_quiz_endpoint_writes_nothing_on_verification_failure(monkeypatch) -> No
     monkeypatch.setattr(quizzes, "embedding_client", lambda _: (embedding, "test"))
     monkeypatch.setattr(quizzes, "_course_access", AsyncMock(return_value=True))
     monkeypatch.setattr(quizzes, "AzureOpenAIProvider", lambda **_: object())
-    monkeypatch.setattr(quizzes, "generate_verified_quiz", AsyncMock(
-        side_effect=QuizVerificationError("Quiz verification failed."),
-    ))
+    verified = QuizResult(title="Verified", questions=[
+        draft_question(f"Question {index}?", explanation="Oxygen is released, which matches option 0.")
+        for index in range(4)
+    ])
+    if verification_fails:
+        monkeypatch.setattr(quizzes, "generate_verified_quiz", AsyncMock(
+            side_effect=QuizVerificationError("Quiz verification failed."),
+        ))
+        with pytest.raises(HTTPException) as exc:
+            asyncio.run(quizzes.generate_quiz(uuid4(), quizzes.GenerateQuizRequest(), SimpleNamespace(id="student"), settings))
+        assert exc.value.status_code == 502
+        assert client.post.await_count == 1
+        assert client.post.await_args.args[0].endswith("/rpc/match_course_material_chunks")
+        return
+    monkeypatch.setattr(quizzes, "generate_verified_quiz", AsyncMock(return_value=verified))
+    quiz = asyncio.run(quizzes.generate_quiz(uuid4(), quizzes.GenerateQuizRequest(), SimpleNamespace(id="student"), settings))
+    stored = client.post.await_args.kwargs["json"]
+    assert len({question.correct_option for question in quiz.questions}) > 1
+    for index, (question, row) in enumerate(zip(quiz.questions, stored, strict=True)):
+        assert question.id == str(index)
+        assert question.options == row["options"]
+        assert question.correct_option == row["correct_option"]
+        assert question.options[question.correct_option] == "Oxygen"
+        assert question.explanation == row["explanation"] == "Oxygen is released."
 
-    with pytest.raises(HTTPException) as exc:
-        asyncio.run(quizzes.generate_quiz(uuid4(), quizzes.GenerateQuizRequest(), SimpleNamespace(id="student"), settings))
 
-    assert exc.value.status_code == 502
-    assert client.post.await_count == 1
-    assert client.post.await_args.args[0].endswith("/rpc/match_course_material_chunks")
+def test_shuffle_keeps_correct_text_and_citations_when_original_key_varies() -> None:
+    originals = [
+        draft_question(f"Question {index}?", correct_option=index % 4,
+                       explanation="Option 1 is correct because the source supports it.")
+        for index in range(8)
+    ]
+    result = shuffle_verified_quiz(QuizResult(title="Verified", questions=originals))
+    destinations = [item.correct_option for item in result.questions]
+    assert max(destinations.count(index) for index in range(4)) <= 4
+    for original, shuffled in zip(originals, result.questions, strict=True):
+        correct = original.options[original.correct_option]
+        assert sorted(shuffled.options) == sorted(original.options)
+        assert shuffled.options[shuffled.correct_option] == correct
+        assert correct in shuffled.explanation and "Option 1" not in shuffled.explanation
+        assert shuffled.citations == original.citations

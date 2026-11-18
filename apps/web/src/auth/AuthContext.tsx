@@ -4,6 +4,7 @@ import {
   useContext,
   useEffect,
   useMemo,
+  useRef,
   useState,
   type ReactNode,
 } from "react";
@@ -49,9 +50,10 @@ export function AuthProvider({ children }: { children: ReactNode }) {
   const [session, setSession] = useState<Session | null>(null);
   const [profile, setProfile] = useState<Profile | null>(null);
   const [loading, setLoading] = useState(isSupabaseConfigured);
+  const activeUser = useRef<string | null>(null);
 
   const loadProfile = useCallback(async (userId: string) => {
-    if (!supabase) return;
+    if (!supabase) return null;
     const { data, error } = await supabase
       .from("profiles")
       .select("id, role, display_name, avatar_url, teacher_approved_at, headline, organization, created_at")
@@ -59,7 +61,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
       .single();
 
     if (error) throw error;
-    setProfile(data as Profile);
+    return data as Profile;
   }, []);
 
   useEffect(() => {
@@ -69,41 +71,36 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     }
 
     let active = true;
-    supabase.auth.getSession().then(async ({ data, error }) => {
-      if (!active) return;
-      if (error) {
-        setLoading(false);
-        return;
-      }
-      setSession(data.session);
-      if (data.session) {
-        try {
-          await loadProfile(data.session.user.id);
-        } finally {
-          if (active) setLoading(false);
-        }
-      } else {
-        setLoading(false);
-      }
-    });
-
+    let identity: string | null | undefined;
+    let revision = 0;
     const { data: listener } = supabase.auth.onAuthStateChange((_event, nextSession) => {
+      if (!active) return;
       setSession(nextSession);
-      if (!nextSession) {
-        setProfile(null);
+      const userId = nextSession?.user.id ?? null;
+      // Token renewal and repeated sign-in events for the same user are not navigation.
+      if (identity === userId && userId !== null) return;
+      identity = userId;
+      activeUser.current = userId;
+      const requestRevision = ++revision;
+      const isCurrent = () => active && requestRevision === revision;
+      setProfile(null);
+      if (!userId) {
         setLoading(false);
         return;
       }
       setLoading(true);
       queueMicrotask(() => {
-        loadProfile(nextSession.user.id)
-          .catch(() => setProfile(null))
-          .finally(() => setLoading(false));
+        if (!isCurrent()) return;
+        loadProfile(userId)
+          .then(nextProfile => { if (isCurrent()) setProfile(nextProfile); })
+          .catch(() => { if (isCurrent()) setProfile(null); })
+          .finally(() => { if (isCurrent()) setLoading(false); });
       });
     });
 
     return () => {
       active = false;
+      activeUser.current = null;
       listener.subscription.unsubscribe();
     };
   }, [loadProfile]);
@@ -147,7 +144,10 @@ export function AuthProvider({ children }: { children: ReactNode }) {
       if (error) throw error;
     },
     async refreshProfile() {
-      if (session) await loadProfile(session.user.id);
+      if (!session) return;
+      const userId = session.user.id;
+      const nextProfile = await loadProfile(userId);
+      if (activeUser.current === userId) setProfile(nextProfile);
     },
   }), [loading, session, profile, loadProfile]);
 

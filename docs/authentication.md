@@ -36,4 +36,12 @@ and must remain server-only.
 - Unapproved teachers can authenticate but only see the approval-pending screen.
 - An administrator promotes a teacher by setting `teacher_approved_at`.
 - Database row-level security remains the source of authorization truth.
+- Routine session renewal updates the in-memory token without reloading the
+  dashboard. A sign-in identity change still rechecks the profile and role.
+- Student quiz drafts are scoped to the signed-in account and course in the
+  current browser tab. They survive navigation and reload, expire after a day
+  without being accessed, and are cleared on explicit sign-out. They do not
+  sync between tabs or devices. Graded submissions are saved on the server.
+- Course Q&A restores the user's latest saved conversation in the approved
+  course. Chat history is loaded from the API, not stored in browser drafts.
 

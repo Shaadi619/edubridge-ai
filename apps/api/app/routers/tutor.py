@@ -351,6 +351,18 @@ class TutorResponse(BaseModel):
     answer: TutorAnswer
 
 
+class SavedTutorMessage(BaseModel):
+    author_role: Literal["student", "assistant"]
+    content: str
+    grounded: bool = False
+    citations: list[Citation] = Field(default_factory=list)
+
+
+class TutorHistory(BaseModel):
+    conversation_id: str | None = None
+    messages: list[SavedTutorMessage] = Field(default_factory=list)
+
+
 ExplanationFormat = Literal["simpler", "analogy", "worked_example", "visual_outline"]
 
 
@@ -390,6 +402,59 @@ async def _course_access(client: httpx.AsyncClient, base: str, headers: dict, co
     )
     enrollment.raise_for_status()
     return bool(enrollment.json())
+
+
+@router.get("/{course_id}/tutor/history", response_model=TutorHistory)
+async def tutor_history(
+    course_id: UUID,
+    user: AuthenticatedUser = Depends(current_user),
+    settings: Settings = Depends(get_settings),
+) -> TutorHistory:
+    base = settings.supabase_url.rstrip("/")
+    key = settings.supabase_service_role_key
+    if not base or not key:
+        raise HTTPException(status_code=503, detail="Conversation history is unavailable")
+    headers = {"apikey": key, "Authorization": f"Bearer {key}"}
+    course = str(course_id)
+    async with httpx.AsyncClient(timeout=15) as client:
+        if not await _course_access(client, base, headers, course, user.id):
+            raise HTTPException(status_code=403, detail="You are not an approved member of this course")
+        conversations = await client.get(f"{base}/rest/v1/conversations", headers=headers, params={
+            "course_id": f"eq.{course}", "student_id": f"eq.{user.id}",
+            "select": "id", "order": "created_at.desc,id.desc", "limit": "1",
+        })
+        conversations.raise_for_status()
+        rows = conversations.json()
+        if not rows:
+            return TutorHistory()
+        conversation_id = rows[0]["id"]
+        response = await client.get(f"{base}/rest/v1/messages", headers=headers, params={
+            "conversation_id": f"eq.{conversation_id}", "order": "created_at.desc,id.desc", "limit": "100",
+            "select": (
+                "author_role,content,grounded,"
+                "message_citations(material_chunks(id,course_id,page_number,materials(id,title,course_id)))"
+            ),
+        })
+        response.raise_for_status()
+
+    messages = []
+    for row in reversed(response.json()):
+        citations = []
+        for citation in row.get("message_citations", []):
+            chunk = citation.get("material_chunks") or {}
+            material = chunk.get("materials") or {}
+            if chunk.get("course_id") != course or material.get("course_id") != course:
+                continue
+            page = chunk["page_number"]
+            citations.append(Citation(
+                chunk_id=chunk["id"], document_id=material["id"], document_title=material["title"],
+                page_number=page, source_kind=_source_kind(material["title"], page),
+            ))
+        messages.append(SavedTutorMessage(
+            author_role=row["author_role"], content=row["content"],
+            grounded=bool(row["grounded"]), citations=citations,
+        ))
+    return TutorHistory(conversation_id=conversation_id, messages=messages)
 
 
 @router.post("/{course_id}/tutor", response_model=TutorResponse)

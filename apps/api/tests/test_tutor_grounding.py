@@ -129,6 +129,51 @@ def route(monkeypatch):
     return arrange
 
 
+def test_restore_history_only_reads_own_course_and_rebuilds_citations(route) -> None:
+    case = route([], _draft())
+    course = str(case.course_id)
+    conversation = str(uuid4())
+    chunk = {
+        "id": "passage", "course_id": course, "page_number": 4,
+        "materials": {"id": "notes", "title": "Lesson.pdf", "course_id": course},
+    }
+
+    async def read(url, *, headers, params):
+        if url.endswith("/conversations"):
+            assert params["student_id"] == "eq.student"
+            assert params["course_id"] == "eq." + course
+            result = [{"id": conversation}]
+        else:
+            assert params["conversation_id"] == "eq." + conversation
+            result = [
+                {"author_role": "assistant", "content": "Saved reply", "grounded": True,
+                 "message_citations": [
+                     {"material_chunks": chunk},
+                     {"material_chunks": {**chunk, "course_id": "different-course"}},
+                 ]},
+                {"author_role": "student", "content": "Saved question", "grounded": None},
+            ]
+        return httpx.Response(200, json=result, request=httpx.Request("GET", url))
+
+    case.client.get.side_effect = read
+    result = asyncio.run(tutor.tutor_history(case.course_id, case.user, case.settings))
+
+    assert result.conversation_id == conversation
+    assert [message.content for message in result.messages] == ["Saved question", "Saved reply"]
+    assert [citation.chunk_id for citation in result.messages[1].citations] == ["passage"]
+    case.client.post.assert_not_awaited()
+    case.model.assert_not_awaited()
+
+
+def test_restore_history_requires_course_access(route, monkeypatch) -> None:
+    case = route([], _draft())
+    monkeypatch.setattr(tutor, "_course_access", AsyncMock(return_value=False))
+    with pytest.raises(HTTPException) as error:
+        asyncio.run(tutor.tutor_history(case.course_id, case.user, case.settings))
+    assert error.value.status_code == 403
+    case.client.get.assert_not_awaited()
+
+
 @pytest.mark.parametrize(("matches", "reason"), [
     ([], tutor.NO_INDEXED_EVIDENCE),
     ([_match(similarity=0.20)], tutor.INSUFFICIENT_EVIDENCE),

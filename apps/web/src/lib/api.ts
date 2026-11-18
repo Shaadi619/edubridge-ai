@@ -259,6 +259,18 @@ export const api = {
     { method: "POST", body: JSON.stringify({ topics, relationships }) },
     accessToken,
   ),
+  tutorHistory: (courseId: string, accessToken: string, signal?: AbortSignal) =>
+    request<{
+      conversation_id: string | null;
+      messages: Array<{
+        author_role: "student" | "assistant";
+        content: string;
+        grounded: boolean;
+        citations: SourceCitation[];
+      }>;
+    }>(
+      "/courses/" + courseId + "/tutor/history", { signal, cache: "no-store" }, accessToken,
+    ),
   tutor: (courseId: string, question: string, accessToken: string, conversationId?: string, signal?: AbortSignal) =>
     request<{
       conversation_id: string;

@@ -1,3 +1,4 @@
+import logging
 from datetime import UTC, datetime, timedelta
 from itertools import combinations
 from typing import Literal
@@ -10,7 +11,7 @@ from pydantic import BaseModel, Field
 from app.ai.azure_provider import AzureOpenAIProvider
 from app.ai.contracts import EvidenceChunk
 from app.ai.embeddings import embedding_client
-from app.ai.quiz_verification import QuizVerificationError, generate_verified_quiz
+from app.ai.quiz_verification import QuizVerificationError, generate_verified_quiz, shuffle_verified_quiz
 from app.auth import AuthenticatedUser, current_user
 from app.concepts import friendly_concept, group_concept_records
 from app.config import Settings, get_settings
@@ -21,6 +22,7 @@ from app.routers.study_plans import concept_key
 from app.routers.tutor import _course_access, _source_kind
 
 router = APIRouter(prefix="/courses", tags=["quizzes"])
+logger = logging.getLogger(__name__)
 
 
 class GenerateQuizRequest(BaseModel):
@@ -1151,6 +1153,7 @@ async def generate_quiz(
             )
         except QuizVerificationError as error:
             raise HTTPException(status_code=502, detail=str(error)) from error
+        result = shuffle_verified_quiz(result)
 
         quiz_response = await client.post(
             f"{base}/rest/v1/quizzes", headers=headers,
@@ -1215,6 +1218,7 @@ async def submit_quiz(
                 },
             )
         except httpx.RequestError as error:
+            logger.warning("Quiz submission database request failed (%s)", type(error).__name__)
             raise HTTPException(
                 status_code=503, detail="Quiz submission could not be confirmed. Try again.",
             ) from error
@@ -1231,4 +1235,5 @@ async def submit_quiz(
     if code in status_codes:
         raise HTTPException(status_code=status_codes[code], detail=error_payload["message"])
 
+    logger.error("Quiz submission database rejected the request (HTTP %s, code=%r)", result.status_code, code)
     raise HTTPException(status_code=503, detail="Quiz submission is temporarily unavailable. Try again.")

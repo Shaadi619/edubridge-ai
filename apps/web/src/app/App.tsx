@@ -22,6 +22,7 @@ import { useAuth } from "../auth/AuthContext";
 import { supabase } from "../lib/supabase";
 import { api, ApiError, type CourseGraphSuggestion, type ExplanationFormat, type SourceCitation, type TeacherInterventionDraft, type WorkSubmission } from "../lib/api";
 import { useScopedQuery, useScopedRequest } from "./useScopedRequest";
+import { clearStudentSession, readQuizDraft, readStudentLocation, writeQuizDraft, writeStudentLocation } from "../lib/studentSession";
 
 const CitationPreview = lazy(() => import("./components/CitationPreview"));
 
@@ -30,6 +31,8 @@ const CitationPreview = lazy(() => import("./components/CitationPreview"));
 type View = "landing" | "auth" | "teacher" | "student" | "admin";
 type TeacherTab = "overview" | "students" | "analytics" | "materials" | "settings";
 type StudentTab = "workspace" | "work" | "lab" | "quiz" | "progress" | "enroll" | "settings";
+const STUDENT_TABS: readonly string[] = ["workspace", "work", "lab", "quiz", "progress", "enroll", "settings"];
+type HistoryStatus = "loading" | "ready" | "error";
 type InterventionQueueItem = Awaited<ReturnType<typeof api.teacherCourseAnalytics>>["intervention_queue"][number];
 
 type Announcement = {
@@ -3329,17 +3332,17 @@ function MasteryJourneysPanel({ data, loading }: {
 
 function StudentDashboard({ onLogout, darkMode, setDarkMode }: { onLogout: () => void; darkMode: boolean; setDarkMode: (v: boolean) => void }) {
   const { profile, session, user } = useAuth();
-  const [tab, setTab] = useState<StudentTab>("workspace");
+  const [initialLocation] = useState(() => readStudentLocation(user?.id ?? ""));
+  const [tab, setTab] = useState<StudentTab>(() => STUDENT_TABS.includes(initialLocation.tab) ? initialLocation.tab as StudentTab : "workspace");
   const [messages, setMessages] = useState<ChatMessage[]>([]);
   const [input, setInput] = useState("");
   const [isTyping, setIsTyping] = useState(false);
   const [tutorStatus, setTutorStatus] = useState("Searching course materials…");
-  const [selectedAnswer, setSelectedAnswer] = useState<number | null>(null);
-  const [showExplanation, setShowExplanation] = useState(false);
   const [practiceConcept, setPracticeConcept] = useState<string | null>(null);
   const [sidebarOpen, setSidebarOpen] = useState(false);
   const [studentCourses, setStudentCourses] = useState<StudentCourse[]>([]);
   const [selectedCourse, setSelectedCourse] = useState<StudentCourse | null>(null);
+  const [courseLoadState, setCourseLoadState] = useState<"loading" | "ready" | "error">("loading");
   const [conversationId, setConversationId] = useState<string | undefined>();
   const [notifications, setNotifications] = useState<Notification[]>([]);
   const [notifOpen, setNotifOpen] = useState(false);
@@ -3348,6 +3351,11 @@ function StudentDashboard({ onLogout, darkMode, setDarkMode }: { onLogout: () =>
   const accessToken = session?.access_token ?? "";
   const courseScope = courseId && session ? `${session.user.id}:${courseId}` : null;
   const startTutorRequest = useScopedRequest(courseScope);
+  const startHistoryRequest = useScopedRequest(courseScope);
+  const [history, setHistory] = useState<{ scope: string; status: HistoryStatus } | null>(null);
+  const historyStatus = history?.scope === courseScope ? history.status : "loading";
+  const latestToken = useRef(accessToken);
+  useLayoutEffect(() => { latestToken.current = accessToken; }, [accessToken]);
   const loadCourseAnnouncements = useCallback(async (signal: AbortSignal) => {
     const rows = await api.announcements(courseId!, accessToken, signal);
     return rows.map(row => ({
@@ -3366,15 +3374,50 @@ function StudentDashboard({ onLogout, darkMode, setDarkMode }: { onLogout: () =>
     setTutorStatus("Searching course materials…");
   }, [courseScope]);
 
+  const restoreHistory = useCallback(async () => {
+    if (!courseScope || !courseId) return;
+    const request = startHistoryRequest();
+    if (!request) return;
+    setHistory({ scope: courseScope, status: "loading" });
+    try {
+      const saved = await api.tutorHistory(courseId, latestToken.current, request.signal);
+      if (!request.isCurrent()) return;
+      let question: string | undefined;
+      const restored = saved.messages.map((message): ChatMessage => {
+        if (message.author_role === "student") {
+          question = message.content;
+          return { role: "user", text: message.content };
+        }
+        return {
+          role: "ai", text: message.content, citations: message.citations, misconception: null,
+          question: message.grounded ? question : undefined,
+        };
+      });
+      setConversationId(saved.conversation_id ?? undefined);
+      setMessages(restored);
+      setHistory({ scope: courseScope, status: "ready" });
+    } catch {
+      if (request.isCurrent()) setHistory({ scope: courseScope, status: "error" });
+    } finally {
+      request.finish();
+    }
+  }, [courseId, courseScope, startHistoryRequest]);
+
+  useEffect(() => { void restoreHistory(); }, [restoreHistory]);
+  useEffect(() => {
+    if (user && courseId) writeStudentLocation(user.id, courseId, tab);
+  }, [user?.id, courseId, tab]);
+
   const loadStudentCourses = useCallback(async () => {
     if (!session) return [];
     const rows = await api.myCourses(session.access_token);
     const loaded = rows.map(row => ({ id: row.id, name: row.name, code: row.enrollment_code, teacher: row.teacher, progress: 0 }));
     setStudentCourses(loaded);
-    setSelectedCourse(current => loaded.find(course => course.id === current?.id) ?? loaded[0] ?? null);
+    setCourseLoadState("ready");
+    setSelectedCourse(current => loaded.find(course => course.id === (current?.id ?? initialLocation.courseId)) ?? loaded[0] ?? null);
     if (!loaded.length) setTab("enroll");
     return loaded;
-  }, [session]);
+  }, [session, initialLocation.courseId]);
 
   useEffect(() => {
     if (!session) return;
@@ -3388,7 +3431,10 @@ function StudentDashboard({ onLogout, darkMode, setDarkMode }: { onLogout: () =>
           retryTimer = window.setTimeout(() => void loadCourses(false), 1500);
           return;
         }
-        if (!cancelled) toast.error(error instanceof Error ? error.message : "Could not load courses.");
+        if (!cancelled) {
+          setCourseLoadState(current => current === "loading" ? "error" : current);
+          toast.error(error instanceof Error ? error.message : "Could not load courses.");
+        }
       }
     };
     const reloadOnFocus = () => { void loadCourses(false); };
@@ -3445,7 +3491,7 @@ function StudentDashboard({ onLogout, darkMode, setDarkMode }: { onLogout: () =>
   ];
 
   const handleSend = async () => {
-    if (!input.trim() || !selectedCourse || !session) return;
+    if (!input.trim() || !selectedCourse || !session || historyStatus !== "ready") return;
     const request = startTutorRequest(false);
     if (!request) return;
     const question = input.trim();
@@ -3539,6 +3585,8 @@ function StudentDashboard({ onLogout, darkMode, setDarkMode }: { onLogout: () =>
     })();
   };
 
+  const courseStatus = courseLoadState === "loading" ? "Loading your courses…" :
+    courseLoadState === "error" ? "Could not load your courses." : null;
   const courseExtra = (
     <div className="p-4 border-b border-primary-foreground/10">
       <div className="text-xs text-primary-foreground/35 font-mono uppercase tracking-wide mb-2">Current Course</div>
@@ -3555,7 +3603,7 @@ function StudentDashboard({ onLogout, darkMode, setDarkMode }: { onLogout: () =>
           <div className="text-sm font-semibold text-primary-foreground">{selectedCourse.name}</div>
           <div className="text-xs text-primary-foreground/45 font-mono">{selectedCourse.teacher} · {selectedCourse.code}</div>
         </div>
-      ) : <div className="text-xs text-primary-foreground/60">No approved courses yet</div>}
+      ) : <div role="status" className="text-xs text-primary-foreground/60">{courseStatus ?? "No approved courses yet"}</div>}
     </div>
   );
 
@@ -3592,22 +3640,28 @@ function StudentDashboard({ onLogout, darkMode, setDarkMode }: { onLogout: () =>
           </div>
         </header>
         <main className="flex-1">
+          {selectedCourse && session && <div hidden={tab !== "quiz"}>
+            <StudentQuiz key={courseScope} userId={session.user.id} courseId={selectedCourse.id}
+              accessToken={session.access_token} onViewProgress={() => setTab("progress")} suggestedFocus={practiceConcept}
+              onFocusConsumed={() => setPracticeConcept(null)} darkMode={darkMode} />
+          </div>}
+          <div hidden={tab === "quiz" && Boolean(selectedCourse && session)}>
           <AnimatePresence mode="wait" initial={false}>
             <motion.div key={tab} initial={{ opacity: 0, y: 6 }} animate={{ opacity: 1, y: 0 }} exit={{ opacity: 0, y: -6 }}
               transition={{ duration: 0.18, ease: "easeOut" }} className="h-full"
             >
-              {tab === "workspace" && selectedCourse && <StudentWorkspace messages={messages} isTyping={isTyping} tutorStatus={tutorStatus} input={input} setInput={setInput} onSend={() => void handleSend()} onExplain={(index, format) => void handleAlternativeExplanation(index, format)} announcements={courseAnnouncements ?? []} course={selectedCourse} darkMode={darkMode} />}
+              {tab === "workspace" && selectedCourse && <StudentWorkspace messages={messages} isTyping={isTyping} tutorStatus={tutorStatus} historyStatus={historyStatus} onRetryHistory={() => void restoreHistory()} input={input} setInput={setInput} onSend={() => void handleSend()} onExplain={(index, format) => void handleAlternativeExplanation(index, format)} announcements={courseAnnouncements ?? []} course={selectedCourse} darkMode={darkMode} />}
               {tab === "work" && selectedCourse && session && <StudentShowWork courseId={selectedCourse.id} courseName={selectedCourse.name} accessToken={session.access_token} />}
               {tab === "work" && !selectedCourse && <div className="p-8 text-sm text-muted-foreground">Join an approved course before submitting work.</div>}
               {tab === "lab" && selectedCourse && session && <StudentConceptLab courseId={selectedCourse.id} courseName={selectedCourse.name} accessToken={session.access_token} />}
               {tab === "lab" && !selectedCourse && <div className="p-8 text-sm text-muted-foreground">Join an approved course before opening the Concept Lab.</div>}
-              {tab === "quiz" && selectedCourse && session && <StudentQuiz courseId={selectedCourse.id} accessToken={session.access_token} selectedAnswer={selectedAnswer} setSelectedAnswer={setSelectedAnswer} showExplanation={showExplanation} setShowExplanation={setShowExplanation} onViewProgress={() => setTab("progress")} suggestedFocus={practiceConcept} onFocusConsumed={() => setPracticeConcept(null)} darkMode={darkMode} />}
-              {tab === "quiz" && !selectedCourse && <div className="p-8 text-sm text-muted-foreground">Join an approved course before generating a quiz.</div>}
+              {tab === "quiz" && !selectedCourse && <div role="status" className="p-8 text-sm text-muted-foreground">{courseStatus ?? "Join an approved course before generating a quiz."}</div>}
               {tab === "progress" && selectedCourse && session && <StudentProgress courseId={selectedCourse.id} courseName={selectedCourse.name} accessToken={session.access_token} onGoQuiz={() => { setPracticeConcept(null); setTab("quiz"); }} onPractice={concept => { setPracticeConcept(concept); setTab("quiz"); }} />}
               {tab === "enroll" && <StudentEnroll courses={studentCourses} />}
               {tab === "settings" && <StudentSettings courses={studentCourses} darkMode={darkMode} setDarkMode={setDarkMode} />}
             </motion.div>
           </AnimatePresence>
+          </div>
         </main>
       </div>
       <NotificationsPanel
@@ -3622,8 +3676,9 @@ function StudentDashboard({ onLogout, darkMode, setDarkMode }: { onLogout: () =>
   );
 }
 
-function StudentWorkspace({ messages, isTyping, tutorStatus, input, setInput, onSend, onExplain, announcements, course, darkMode }: {
+function StudentWorkspace({ messages, isTyping, tutorStatus, historyStatus, onRetryHistory, input, setInput, onSend, onExplain, announcements, course, darkMode }: {
   messages: ChatMessage[]; isTyping: boolean; tutorStatus: string; input: string;
+  historyStatus: HistoryStatus; onRetryHistory: () => void;
   setInput: (v: string) => void; onSend: () => void;
   onExplain: (messageIndex: number, format: ExplanationFormat) => void;
   announcements: Announcement[]; course: StudentCourse; darkMode: boolean;
@@ -3670,6 +3725,11 @@ function StudentWorkspace({ messages, isTyping, tutorStatus, input, setInput, on
         ))}
       </AnimatePresence>
       <div className="flex-1 overflow-y-auto p-6 space-y-5">
+        {historyStatus === "loading" && <p role="status" className="text-sm text-muted-foreground">Restoring your conversation…</p>}
+        {historyStatus === "error" && <div role="status" className="flex flex-wrap items-center gap-3 text-sm text-muted-foreground">
+          <span>Could not restore your conversation.</span>
+          <button type="button" onClick={onRetryHistory} className="rounded-lg border border-border px-3 py-1.5 font-medium text-foreground hover:bg-muted">Try again</button>
+        </div>}
         {messages.map((msg, i) => (
           <div key={i} className={`flex gap-3 ${msg.role === "user" ? "flex-row-reverse" : ""}`}>
             {msg.role === "ai" && (
@@ -3752,7 +3812,8 @@ function StudentWorkspace({ messages, isTyping, tutorStatus, input, setInput, on
             className="flex-1 border border-border rounded-xl px-4 py-2.5 text-sm bg-card focus:outline-none focus:ring-2 focus:ring-ring shadow-sm"
           />
           <motion.button whileHover={{ scale: 1.04 }} whileTap={{ scale: 0.93 }}
-            onClick={onSend} disabled={!input.trim() || isTyping}
+            onClick={onSend} disabled={!input.trim() || isTyping || historyStatus !== "ready"}
+            aria-label="Send question"
             className="bg-primary text-primary-foreground px-4 py-2.5 rounded-xl disabled:opacity-35 shadow-sm"
           >
             <Send size={15} />
@@ -3990,27 +4051,30 @@ const QUIZ_QUESTIONS = [
   },
 ];
 
-function StudentQuiz({ courseId, accessToken, selectedAnswer, setSelectedAnswer, showExplanation, setShowExplanation, onViewProgress, suggestedFocus, onFocusConsumed, darkMode }: {
-  courseId: string; accessToken: string;
-  selectedAnswer: number | null; setSelectedAnswer: (n: number | null) => void;
-  showExplanation: boolean; setShowExplanation: (v: boolean) => void;
+function StudentQuiz({ userId, courseId, accessToken, onViewProgress, suggestedFocus, onFocusConsumed, darkMode }: {
+  userId: string; courseId: string; accessToken: string;
   onViewProgress: () => void;
   suggestedFocus: string | null;
   onFocusConsumed: () => void;
   darkMode: boolean;
 }) {
   type GeneratedQuiz = Awaited<ReturnType<typeof api.generateQuiz>>;
-  const [quiz, setQuiz] = useState<GeneratedQuiz | null>(null);
+  const [initialDraft] = useState(() => readQuizDraft(userId, courseId));
+  const [quiz, setQuiz] = useState<GeneratedQuiz | null>(initialDraft?.quiz ?? null);
   const [loading, setLoading] = useState(false);
   const [loadError, setLoadError] = useState<string | null>(null);
   const generationInFlight = useRef(false);
-  const [questionIndex, setQuestionIndex] = useState(0);
-  const [answers, setAnswers] = useState<(number | null)[]>([]);
-  const [confidences, setConfidences] = useState<(number | null)[]>([]);
-  const [selectedConfidence, setSelectedConfidence] = useState<number | null>(null);
-  const [showResults, setShowResults] = useState(false);
+  const [questionIndex, setQuestionIndex] = useState(initialDraft?.questionIndex ?? 0);
+  const [answers, setAnswers] = useState<(number | null)[]>(initialDraft?.answers ?? []);
+  const [confidences, setConfidences] = useState<(number | null)[]>(initialDraft?.confidences ?? []);
+  const [selectedAnswer, setSelectedAnswer] = useState<number | null>(initialDraft?.selectedAnswer ?? null);
+  const [selectedConfidence, setSelectedConfidence] = useState<number | null>(initialDraft?.selectedConfidence ?? null);
+  const [showExplanation, setShowExplanation] = useState(initialDraft?.showExplanation ?? false);
+  const [showResults, setShowResults] = useState(initialDraft?.showResults ?? false);
   const [practiceTopic, setPracticeTopic] = useState<string | null>(null);
   const [savingAttempt, setSavingAttempt] = useState(false);
+  const [replaceQuiz, setReplaceQuiz] = useState(false);
+  const submissionInFlight = useRef(false);
 
   const loadQuiz = async (focusConcept?: string) => {
     if (generationInFlight.current) return;
@@ -4028,6 +4092,7 @@ function StudentQuiz({ courseId, accessToken, selectedAnswer, setSelectedAnswer,
       setShowExplanation(false);
       setShowResults(false);
       setPracticeTopic(null);
+      setReplaceQuiz(false);
       if (focusConcept) onFocusConsumed();
     } catch (error) {
       setLoadError(error instanceof Error ? error.message : "Could not generate a quiz.");
@@ -4037,27 +4102,21 @@ function StudentQuiz({ courseId, accessToken, selectedAnswer, setSelectedAnswer,
     }
   };
 
-  useEffect(() => {
-    setQuiz(null);
-    setLoadError(null);
-    setQuestionIndex(0);
-    setAnswers([]);
-    setConfidences([]);
-    setSelectedConfidence(null);
-    setSelectedAnswer(null);
-    setShowExplanation(false);
-    setShowResults(false);
-    setPracticeTopic(null);
-  }, [courseId]);
+  useLayoutEffect(() => {
+    if (!quiz) return;
+    writeQuizDraft(userId, courseId, {
+      quiz, questionIndex, answers, confidences, selectedAnswer, selectedConfidence, showExplanation, showResults,
+    });
+  }, [userId, courseId, quiz, questionIndex, answers, confidences, selectedAnswer, selectedConfidence, showExplanation, showResults]);
 
-  if (loading) return <div className="p-8 max-w-2xl mx-auto"><div className="bg-card border border-border rounded-xl p-6 flex items-center gap-3"><TypingIndicator /><span className="text-sm text-muted-foreground">Generating a quiz from your course materials…</span></div></div>;
+  if (loading) return <div className="p-8 max-w-2xl mx-auto"><div role="status" className="bg-card border border-border rounded-xl p-6 flex items-center gap-3"><TypingIndicator /><span className="text-sm text-muted-foreground">Generating a quiz from your course materials…</span></div></div>;
   if (!quiz) return (
     <div className="p-6 lg:p-8 max-w-2xl mx-auto">
       <div className="bg-card border border-border rounded-2xl p-8 text-center shadow-sm">
         <div className="w-12 h-12 rounded-xl bg-primary/10 text-primary flex items-center justify-center mx-auto mb-4"><Target size={22} /></div>
         <h2 className="font-display text-2xl text-foreground mb-2">Course-grounded quiz</h2>
         <p className="text-sm text-muted-foreground font-light leading-relaxed max-w-md mx-auto mb-6">
-          {suggestedFocus ? <>Generate four questions focused on <span className="font-semibold text-foreground">{suggestedFocus}</span> from this course’s uploaded materials.</> : "Generate four questions from this course’s uploaded materials. A new quiz is created only when you choose to generate one."}
+          {suggestedFocus ? <>Generate up to four questions focused on <span className="font-semibold text-foreground">{suggestedFocus}</span> from this course’s uploaded materials.</> : "Generate up to four questions from this course’s uploaded materials. Your quiz stays open when you switch sections."}
         </p>
         {loadError && <div className="bg-red-50 border border-red-200 rounded-lg px-4 py-3 text-sm text-red-800 mb-4">{loadError}</div>}
         <motion.button whileHover={{ scale: 1.01 }} whileTap={{ scale: 0.98 }} onClick={() => void loadQuiz(suggestedFocus ?? undefined)}
@@ -4086,6 +4145,7 @@ function StudentQuiz({ courseId, accessToken, selectedAnswer, setSelectedAnswer,
   const pct = Math.round((correctCount / quizQuestions.length) * 100);
 
   const handleNext = async () => {
+    if (submissionInFlight.current) return;
     const newAnswers = [...answers];
     newAnswers[questionIndex] = selectedAnswer;
     setAnswers(newAnswers);
@@ -4093,6 +4153,7 @@ function StudentQuiz({ courseId, accessToken, selectedAnswer, setSelectedAnswer,
     newConfidences[questionIndex] = selectedConfidence;
     setConfidences(newConfidences);
     if (isLastQuestion) {
+      submissionInFlight.current = true;
       setSavingAttempt(true);
       try {
         await api.submitQuiz(courseId, quiz.id, newAnswers, newConfidences, accessToken);
@@ -4100,6 +4161,7 @@ function StudentQuiz({ courseId, accessToken, selectedAnswer, setSelectedAnswer,
       } catch (error) {
         toast.error(error instanceof Error ? error.message : "Quiz score could not be saved.");
       } finally {
+        submissionInFlight.current = false;
         setSavingAttempt(false);
       }
     } else {
@@ -4116,6 +4178,7 @@ function StudentQuiz({ courseId, accessToken, selectedAnswer, setSelectedAnswer,
     const wrongTopics = quizQuestions.filter((_, i) => answers[i] !== quizQuestions[i].correct).map(q => q.topic);
     return (
       <div className="p-6 lg:p-8 max-w-2xl mx-auto">
+        {loadError && <p role="alert" className="mb-4 rounded-lg border border-red-200 bg-red-50 px-4 py-3 text-sm text-red-800">{loadError}</p>}
         {/* Score hero */}
         <div className={`rounded-2xl p-6 text-center mb-6 border ${pct >= 75 ? "bg-emerald-50 border-emerald-200" : pct >= 50 ? "bg-amber-50 border-amber-200" : "bg-red-50 border-red-200"}`}>
           <div className={`font-display text-6xl mb-1 ${pct >= 75 ? "text-emerald-600" : pct >= 50 ? "text-amber-600" : "text-red-600"}`}>{pct}%</div>
@@ -4201,7 +4264,7 @@ function StudentQuiz({ courseId, accessToken, selectedAnswer, setSelectedAnswer,
           <motion.button whileHover={{ scale: 1.01 }} whileTap={{ scale: 0.98 }}
             onClick={retake}
             className="flex-1 border border-border text-foreground py-3 rounded-xl font-medium hover:bg-muted transition-colors text-sm flex items-center justify-center gap-2">
-            <RotateCcw size={14} />Retake Quiz
+            <RotateCcw size={14} />Start new quiz
           </motion.button>
           <motion.button whileHover={{ scale: 1.01 }} whileTap={{ scale: 0.98 }} onClick={onViewProgress}
             className="flex-1 bg-primary text-primary-foreground py-3 rounded-xl font-medium shadow-sm text-sm flex items-center justify-center gap-2">
@@ -4214,6 +4277,20 @@ function StudentQuiz({ courseId, accessToken, selectedAnswer, setSelectedAnswer,
 
   return (
     <div className="p-6 lg:p-8 max-w-2xl mx-auto">
+      <div className="mb-4 flex justify-end">
+        <button type="button" disabled={savingAttempt} onClick={() => setReplaceQuiz(open => !open)}
+          aria-expanded={replaceQuiz} className="rounded-lg border border-border px-3 py-1.5 text-xs font-medium text-foreground hover:bg-muted disabled:opacity-50">
+          {suggestedFocus ? "Start targeted quiz" : "Start new quiz"}
+        </button>
+      </div>
+      {replaceQuiz && <div className="mb-4 rounded-xl border border-border bg-card p-4 text-sm">
+        <p>Starting a new quiz will replace your unfinished quiz once the new questions are ready.</p>
+        <div className="mt-3 flex flex-wrap gap-2">
+          <button type="button" onClick={() => setReplaceQuiz(false)} className="rounded-lg border border-border px-3 py-1.5 font-medium hover:bg-muted">Keep current quiz</button>
+          <button type="button" onClick={() => void loadQuiz(suggestedFocus ?? undefined)} className="rounded-lg bg-primary px-3 py-1.5 font-medium text-primary-foreground hover:opacity-90">Generate new quiz</button>
+        </div>
+      </div>}
+      {loadError && <p role="alert" className="mb-4 rounded-lg border border-red-200 bg-red-50 px-4 py-3 text-sm text-red-800">{loadError}</p>}
       {quiz.prerequisite_concepts.length > 0 && quiz.focus_concept && <div className="rounded-xl border border-emerald-200 bg-emerald-50 px-4 py-3 mb-5">
         <div className="text-xs font-semibold text-emerald-900 mb-1">Prerequisite-aware practice</div>
         <div className="text-xs text-emerald-800 flex flex-wrap items-center gap-1.5">
@@ -4248,6 +4325,7 @@ function StudentQuiz({ courseId, accessToken, selectedAnswer, setSelectedAnswer,
           return (
             <motion.button key={i} whileTap={!showExplanation ? { scale: 0.98 } : {}}
               onClick={() => { if (!showExplanation) setSelectedAnswer(i); }}
+              aria-pressed={isSelected}
               className={`w-full text-left px-4 py-3.5 rounded-xl border text-sm font-medium transition-all shadow-sm ${
                 isRight ? "border-emerald-400 bg-emerald-50 text-emerald-800" :
                 isWrong ? "border-red-300 bg-red-50 text-red-800" :
@@ -4273,7 +4351,7 @@ function StudentQuiz({ courseId, accessToken, selectedAnswer, setSelectedAnswer,
           <p className="text-xs text-muted-foreground mb-3">Choose before seeing the answer. This helps distinguish a guess from a stable misunderstanding.</p>
           <div className="grid grid-cols-3 gap-2">
             {[{ value: 1, label: "Not sure" }, { value: 2, label: "Somewhat sure" }, { value: 3, label: "Very sure" }].map(option => (
-              <button key={option.value} onClick={() => setSelectedConfidence(option.value)}
+              <button key={option.value} onClick={() => setSelectedConfidence(option.value)} aria-pressed={selectedConfidence === option.value}
                 className={`rounded-lg border px-3 py-2 text-xs font-medium transition-colors ${selectedConfidence === option.value ? "bg-primary text-primary-foreground border-primary" : "bg-background text-foreground border-border hover:bg-muted"}`}>
                 {option.label}
               </button>
@@ -5751,6 +5829,7 @@ export default function App() {
   const logout = async () => {
     try {
       await signOut();
+      if (session) clearStudentSession(session.user.id);
       setView("landing");
       toast.success("Signed out.");
     } catch (error) {

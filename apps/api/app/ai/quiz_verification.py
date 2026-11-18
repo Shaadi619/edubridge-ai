@@ -1,5 +1,7 @@
 import json
 import logging
+import random
+import re
 from collections import Counter
 
 from pydantic import ValidationError
@@ -17,10 +19,48 @@ from app.ai.prompts import QUIZ_SYSTEM_PROMPT, QUIZ_VERIFICATION_SYSTEM_PROMPT
 from app.ai.provider import AIProvider
 
 logger = logging.getLogger(__name__)
+_POSITION_DEPENDENT = re.compile(
+    r"\b(?:all|none|both|any|neither|some)\s+of\s+(?:the\s+)?(?:above|below|preceding|following)\b"
+    r"|\b(?:both\s+)?[A-D]\s*(?:and|or|&|/)\s*[A-D](?:\s+only)?[.)]?\s*$",
+    re.IGNORECASE,
+)
+_POSITION_LABEL = r"\b(?:option|choice|answer)\s*(?:number\s*)?[:#]?\s+(?:\(?[A-D\d]\)?)(?!\w)"
+_LEADING_CHOICE_LABEL = re.compile(r"^\s*(?:[A-D][.)]|\([A-D]\))\s+", re.IGNORECASE)
+_POSITION_TAIL = re.compile(
+    r"\s*,?\s*(?:which\s+)?(?:matches|corresponds to)\s+(?:the\s+)?"
+    + _POSITION_LABEL + r"\s*(?=[.!?]?\s*$)",
+    re.IGNORECASE,
+)
 
 
 class QuizVerificationError(ValueError):
     """The model did not supply enough verified items within the retry budget."""
+
+
+def shuffle_verified_quiz(quiz: QuizResult) -> QuizResult:
+    """Reorder verified choices once, before the quiz's official key is stored."""
+    rng = random.SystemRandom()
+    positions: Counter[int] = Counter()
+    # Guarantee variety without giving away a fixed A/B/C/D distribution.
+    per_position_limit = (len(quiz.questions) + 1) // 2
+    questions = []
+    for question in quiz.questions:
+        correct = question.options[question.correct_option]
+        options = [option for index, option in enumerate(question.options) if index != question.correct_option]
+        rng.shuffle(options)
+        position = rng.choice([
+            index for index in range(len(question.options)) if positions[index] < per_position_limit
+        ])
+        options.insert(position, correct)
+        positions[position] += 1
+
+        explanation = _POSITION_TAIL.sub("", question.explanation).strip()
+        if not explanation or re.search(_POSITION_LABEL, explanation, re.IGNORECASE):
+            explanation = f"The course material supports this answer: {correct}"
+        questions.append(question.model_copy(update={
+            "options": options, "correct_option": position, "explanation": explanation,
+        }))
+    return quiz.model_copy(update={"questions": questions})
 
 
 async def generate_verified_quiz(
@@ -82,6 +122,11 @@ async def generate_verified_quiz(
                 or len(question.options) != 4
                 or len(options) != 4
                 or "" in options
+                or _POSITION_DEPENDENT.search(question.prompt)
+                or any(
+                    _POSITION_DEPENDENT.search(option) or _LEADING_CHOICE_LABEL.search(option)
+                    for option in question.options
+                )
                 or not 0 <= question.correct_option < 4
                 or not any(citation.chunk_id in sources for citation in question.citations)
             ):
