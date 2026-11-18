@@ -174,7 +174,7 @@ export default function QuizStage({ userId, courseId, courseName, accessToken, o
                   <span className="text-[15px] font-medium leading-snug">{question.prompt}</span>
                   {!right && <span className="text-sm text-[var(--eb-text-soft)]">Answer: <span className="font-semibold text-[var(--eb-text)]">{question.options[question.correct_option]}</span></span>}
                   {!right && confidences[index] === 3 && (
-                    <span className="text-sm text-[var(--eb-light)]">You were very sure here, so it’s worth reviewing your reasoning.</span>
+                    <span className="text-sm text-[var(--eb-text)]">You were very sure here, so it’s worth reviewing your reasoning.</span>
                   )}
                 </div>
               </li>
@@ -328,7 +328,7 @@ export default function QuizStage({ userId, courseId, courseName, accessToken, o
               </span>
               <div className="text-[16px] leading-[1.7] text-[var(--eb-text-soft)] [&_strong]:text-[var(--eb-text)]">{renderText(q.explanation)}</div>
               {!isCorrect && selectedConfidence === 3 && (
-                <span className="text-sm text-[var(--eb-light)]">You were very sure, so this one is worth a second look.</span>
+                <span className="text-sm font-medium text-[var(--eb-text)]">You were very sure, so this one is worth a second look.</span>
               )}
               <button type="button" onClick={() => void handleNext()} disabled={savingAttempt} className={`${primaryButton} mt-2 self-start`}>
                 {savingAttempt ? "Saving your answers…" : isLastQuestion ? "See results" : "Next question"}

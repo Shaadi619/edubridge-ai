@@ -272,7 +272,7 @@ export default function TodayStage({ courseId, analytics, loading, accessToken, 
                   <span className="flex min-w-0 flex-1 flex-col gap-1">
                     <span className="flex justify-between gap-2.5">
                       <span className="text-[15px] font-semibold">{entry.student}</span>
-                      {urgent && <span className="whitespace-nowrap text-[13px] text-[var(--eb-light)]">High priority</span>}
+                      {urgent && <span className="whitespace-nowrap text-[13px] font-semibold text-[#E8907F]">High priority</span>}
                     </span>
                     {quote
                       ? <span className="text-sm leading-snug text-[#A7DDD6]">“{quote}”</span>

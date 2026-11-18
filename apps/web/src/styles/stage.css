@@ -74,6 +74,7 @@
   animation: eb-drift ease-in-out infinite;
 }
 .eb-source.is-quiet .eb-mote { display: none; }
+.eb-source.is-quiet .eb-paper { flex: 0 0 auto; min-height: 0; }
 @keyframes eb-drift {
   0% { transform: translate(0, 0); opacity: 0; }
   25% { opacity: 0.85; }

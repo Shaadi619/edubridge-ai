@@ -38,6 +38,11 @@ function frameLabel(citation: SourceCitation) {
   return citationLocation(citation.source_kind, citation.page_number) ?? "Excerpt";
 }
 
+/** Slide bullets arrive inline ("a • b • c"); give each its own line. */
+function asLines(text: string) {
+  return text.replace(/\s*[•▪●]\s*/g, "\n• ").replace(/^\n/, "");
+}
+
 function shortTitle(title: string) {
   return title.replace(/\.(pdf|pptx?|docx?)$/i, "");
 }
@@ -185,12 +190,12 @@ export default function SourceStage({ courseId, items, activeKey, onPick, hoverK
                   : "Lit lines share the most wording with the answer")
                 : "Retrieved excerpt"}
             </span>
-            <p className="eb-serif m-0 mt-3 text-[18px] leading-[1.75] text-[var(--eb-ink-muted)]">
+            <p className="eb-serif m-0 mt-3 whitespace-pre-line text-[18px] leading-[1.75] text-[var(--eb-ink-muted)]">
               {spans.map((span, index) => (
                 <span key={index}>
                   {span.lit
-                    ? <mark className={`eb-lit${glowing ? " is-hovered" : ""}`}>{span.text}</mark>
-                    : span.text}
+                    ? <mark className={`eb-lit${glowing ? " is-hovered" : ""}`}>{asLines(span.text)}</mark>
+                    : asLines(span.text)}
                   {index < spans.length - 1 ? " " : ""}
                 </span>
               ))}
