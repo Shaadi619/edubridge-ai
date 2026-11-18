@@ -53,10 +53,39 @@ function shortTitle(title: string) {
   return title.replace(/\.(pdf|pptx?|docx?)$/i, "");
 }
 
-function whereLabel(item: QueueItem) {
+function formatDate(iso: string) {
+  return new Date(iso).toLocaleDateString(undefined, { day: "numeric", month: "long" });
+}
+
+/** A phrase that says what the item's date means for its kind of item. */
+function itemWhen(item: QueueItem) {
+  if (!item.due_at || Number.isNaN(new Date(item.due_at).getTime())) return null;
+  switch (item.source) {
+    case "study_plan": return `Overdue since ${formatDate(item.due_at)}`;
+    case "retention": return `Follow-up check due ${formatDate(item.due_at)}`;
+    case "misconception": return `Flagged ${timeAgo(item.due_at)}`;
+    default: return `Last seen ${timeAgo(item.due_at)}`;
+  }
+}
+
+function itemLocation(item: QueueItem) {
   const citation = item.citations[0];
-  const location = citation ? citationLocation(citation.source_kind, citation.page_number) : null;
-  return location ? `${item.concept}, ${location.toLowerCase()}` : item.concept;
+  return citation ? citationLocation(citation.source_kind, citation.page_number) : null;
+}
+
+type StudentGroup = { studentId: string; student: string; items: QueueItem[] };
+
+function listConcepts(items: QueueItem[]) {
+  const names = [...new Set(items.map(item => item.concept))];
+  if (names.length <= 2) return names.join(" and ");
+  return `${names.slice(0, 2).join(", ")} and ${names.length - 2} more`;
+}
+
+function groupSummary(items: QueueItem[]) {
+  const sources = new Set(items.map(item => item.source));
+  if (items.length === 1) return SOURCE_LABEL[items[0].source];
+  if (sources.size === 1 && items[0].source === "study_plan") return `${items.length} overdue study tasks`;
+  return `${items.length} things to look at`;
 }
 
 type ExcerptState = "none" | "loading" | "error" | CitationExcerpt;
@@ -128,36 +157,50 @@ export default function TodayStage({ courseId, analytics, loading, accessToken, 
   onDraft: (item: QueueItem) => void;
   onViewStudent: (studentId: string) => void;
 }) {
-  const [selectedId, setSelectedId] = useState<string | null>(null);
+  const [selectedStudent, setSelectedStudent] = useState<string | null>(null);
+  const [selectedItemId, setSelectedItemId] = useState<string | null>(null);
   const [concept, setConcept] = useState<string | null>(null);
   const [resolvedIds, setResolvedIds] = useState<string[]>([]);
   const [resolvingId, setResolvingId] = useState<string | null>(null);
 
-  useEffect(() => { setSelectedId(null); setConcept(null); setResolvedIds([]); }, [courseId]);
+  useEffect(() => { setSelectedStudent(null); setSelectedItemId(null); setConcept(null); setResolvedIds([]); }, [courseId]);
 
+  const isAssigned = (item: QueueItem) => item.practice_assigned || assignedIds.includes(item.id);
   const items = useMemo(
     () => (analytics?.intervention_queue ?? []).filter(item => !resolvedIds.includes(item.id)),
     [analytics, resolvedIds],
   );
-  const isAssigned = (item: QueueItem) => item.practice_assigned || assignedIds.includes(item.id);
-  const openStudents = new Set(items.filter(item => !isAssigned(item)).map(item => item.student_id)).size;
-  const shown = concept ? items.filter(item => item.concept === concept) : items;
-  const selected = shown.find(item => item.id === selectedId) ?? shown[0] ?? null;
+
+  // One row per student, in the order the backend prioritised their first item.
+  const groups = useMemo(() => {
+    const byStudent = new Map<string, StudentGroup>();
+    items.forEach(item => {
+      const group = byStudent.get(item.student_id) ?? { studentId: item.student_id, student: item.student, items: [] };
+      group.items.push(item);
+      byStudent.set(item.student_id, group);
+    });
+    return [...byStudent.values()];
+  }, [items]);
+
+  const openStudents = groups.filter(group => group.items.some(item => !isAssigned(item))).length;
+  const shownGroups = concept ? groups.filter(group => group.items.some(item => item.concept === concept)) : groups;
+  const group = shownGroups.find(entry => entry.studentId === selectedStudent) ?? shownGroups[0] ?? null;
+  const groupItems = group ? (concept ? group.items.filter(item => item.concept === concept) : group.items) : [];
+  const selected = groupItems.find(item => item.id === selectedItemId)
+    ?? groupItems.find(item => !isAssigned(item)) ?? groupItems[0] ?? null;
 
   const concepts = useMemo(() => {
-    const groups = new Map<string, { name: string; students: Set<string>; pages: Set<string> }>();
+    const byConcept = new Map<string, { name: string; students: Set<string>; pages: Set<string> }>();
     items.forEach(item => {
-      const group = groups.get(item.concept) ?? { name: item.concept, students: new Set<string>(), pages: new Set<string>() };
-      group.students.add(item.student_id);
-      item.citations.forEach(citation => {
-        const location = citationLocation(citation.source_kind, citation.page_number);
-        if (location) group.pages.add(location);
-      });
-      groups.set(item.concept, group);
+      const entry = byConcept.get(item.concept) ?? { name: item.concept, students: new Set<string>(), pages: new Set<string>() };
+      entry.students.add(item.student_id);
+      const location = itemLocation(item);
+      if (location) entry.pages.add(location);
+      byConcept.set(item.concept, entry);
     });
-    return [...groups.values()].sort((a, b) => b.students.size - a.students.size).slice(0, 4);
+    return [...byConcept.values()].sort((a, b) => b.students.size - a.students.size).slice(0, 4);
   }, [items]);
-  const maxStudents = Math.max(1, ...concepts.map(group => group.students.size));
+  const maxStudents = Math.max(1, ...concepts.map(entry => entry.students.size));
 
   const resolve = async (item: QueueItem) => {
     if (!item.misconception_id) return;
@@ -178,6 +221,7 @@ export default function TodayStage({ courseId, analytics, loading, accessToken, 
     ? "Loading today’s queue…"
     : openStudents === 0 ? "Everyone is on track today"
     : `${openStudents} student${openStudents === 1 ? " needs" : "s need"} you today`;
+  const hasPassage = Boolean(selected && selected.citations.length > 0);
 
   return (
     <section aria-label="Students who need you today" className="eb-stage mb-10 overflow-hidden rounded-2xl px-6 py-7 sm:px-8 sm:py-8">
@@ -185,86 +229,105 @@ export default function TodayStage({ courseId, analytics, loading, accessToken, 
         <span className="text-sm text-[var(--eb-text-muted)]">{today}</span>
         <h1 aria-live="polite" className="m-0 text-[34px] font-semibold leading-[1.1] tracking-[-0.025em] sm:text-[40px]">{headline}</h1>
         <p className="m-0 mt-1 max-w-[62ch] text-[15px] text-[var(--eb-text-muted)]">
-          Flags from the tutor, quizzes and follow-up checks. Each one sits next to the passage in your material that addresses it.
+          Flags from the tutor, quizzes, follow-up checks and study plans, with the course passage behind each one where there is one.
         </p>
       </header>
 
-      {items.length > 0 && (
+      {groups.length > 0 && (
         <div className="flex flex-wrap items-start gap-6">
-          <div role="group" aria-label="Students to review" className="flex min-w-0 max-w-[420px] flex-[1_1_300px] flex-col gap-2">
-            {shown.map(item => {
-              const on = selected?.id === item.id;
-              const assigned = isAssigned(item);
-              const when = timeAgo(item.due_at);
+          <div role="group" aria-label="Students to review" className="flex min-w-0 max-w-[400px] flex-[1_1_280px] flex-col gap-2">
+            {shownGroups.map(entry => {
+              const on = group?.studentId === entry.studentId;
+              const allAssigned = entry.items.every(isAssigned);
+              const quote = entry.items.find(item => item.student_evidence)?.student_evidence;
+              const urgent = entry.items.some(item => item.priority === "high" && !isAssigned(item));
               return (
-                <button key={item.id} type="button" onClick={() => setSelectedId(item.id)} aria-pressed={on}
+                <button key={entry.studentId} type="button" aria-pressed={on}
+                  onClick={() => { setSelectedStudent(entry.studentId); setSelectedItemId(null); }}
                   className={`flex w-full items-start gap-3.5 rounded-xl px-4 py-3.5 text-left transition-[background,box-shadow] duration-200 ${on
                     ? "bg-[var(--eb-raised)] shadow-[0_0_0_1px_rgba(240,185,74,0.5),0_10px_30px_-12px_rgba(0,0,0,0.6)]"
-                    : `shadow-[0_0_0_1px_var(--eb-line-soft)] hover:bg-[var(--eb-raised-2)]${assigned ? " opacity-70" : ""}`}`}
+                    : `shadow-[0_0_0_1px_var(--eb-line-soft)] hover:bg-[var(--eb-raised-2)]${allAssigned ? " opacity-70" : ""}`}`}
                 >
                   <span aria-hidden="true" className="flex h-[38px] w-[38px] shrink-0 items-center justify-center rounded-full border-2 border-[var(--eb-student)] text-[13px] font-bold text-[var(--eb-student-text)]">
-                    {initials(item.student)}
+                    {initials(entry.student)}
                   </span>
                   <span className="flex min-w-0 flex-1 flex-col gap-1">
                     <span className="flex justify-between gap-2.5">
-                      <span className="text-[15px] font-semibold">{item.student}</span>
-                      {when && <span className="whitespace-nowrap text-[13px] text-[var(--eb-text-muted)]">{when}</span>}
+                      <span className="text-[15px] font-semibold">{entry.student}</span>
+                      {urgent && <span className="whitespace-nowrap text-[13px] text-[var(--eb-light)]">High priority</span>}
                     </span>
-                    {item.student_evidence
-                      ? <span className="text-sm leading-snug text-[#A7DDD6]">“{item.student_evidence}”</span>
-                      : <span className="text-sm leading-snug text-[var(--eb-text-soft)]">{SOURCE_LABEL[item.source]}</span>}
-                    <span className="text-[13px] text-[var(--eb-text-muted)]">{whereLabel(item)}</span>
-                    {assigned && <span className="mt-1 self-start rounded-md bg-[#A7DDD6] px-2 py-0.5 text-[13px] font-semibold text-[var(--eb-ink)]">Practice assigned</span>}
+                    {quote
+                      ? <span className="text-sm leading-snug text-[#A7DDD6]">“{quote}”</span>
+                      : <span className="text-sm leading-snug text-[var(--eb-text-soft)]">{groupSummary(entry.items)}</span>}
+                    <span className="text-[13px] text-[var(--eb-text-muted)]">{listConcepts(entry.items)}</span>
+                    {allAssigned && <span className="mt-1 self-start rounded-md bg-[#A7DDD6] px-2 py-0.5 text-[13px] font-semibold text-[var(--eb-ink)]">Practice assigned</span>}
                   </span>
                 </button>
               );
             })}
-            {shown.length === 0 && (
+            {shownGroups.length === 0 && (
               <p className="m-0 rounded-xl bg-[var(--eb-raised-2)] px-4 py-4 text-[var(--eb-text-soft)]">Nobody is waiting on this concept. Pick another below or show everyone.</p>
             )}
           </div>
 
-          {selected && (
-            <div className="eb-source min-w-0 flex-[999_1_520px] rounded-[18px] shadow-[inset_0_0_160px_rgba(0,0,0,0.6),0_0_0_1px_#26313D]">
+          {group && selected && (
+            <div className={`eb-source min-w-0 flex-[999_1_520px] rounded-[18px] shadow-[inset_0_0_160px_rgba(0,0,0,0.6),0_0_0_1px_#26313D]${hasPassage ? "" : " is-quiet"}`}>
               <div aria-hidden="true" className="eb-beam" style={{ left: "62%", width: "90%" }} />
               <div aria-hidden="true" className="pointer-events-none absolute inset-0">
                 {MOTES.map((mote, index) => (
                   <span key={index} className="eb-mote" style={{ left: mote.left, top: mote.top, width: mote.size, height: mote.size, animationDuration: mote.duration, animationDelay: mote.delay }} />
                 ))}
               </div>
-              <div key={selected.id} className="eb-rise relative z-[1] flex flex-col gap-6 px-6 py-6 sm:px-8 sm:py-7">
+              <div key={group.studentId} className="eb-rise relative z-[1] flex flex-col gap-6 px-6 py-6 sm:px-8 sm:py-7">
                 <div className="flex flex-wrap items-start justify-between gap-3">
                   <div className="flex flex-col">
-                    <span className="text-[22px] font-semibold tracking-[-0.01em]">{selected.student}</span>
-                    <span className="text-sm text-[var(--eb-text-muted)]">
-                      {SOURCE_LABEL[selected.source]}{timeAgo(selected.due_at) ? ` ${timeAgo(selected.due_at)}` : ""}
-                      {selected.priority === "high" ? ". High priority" : ""}
-                    </span>
+                    <span className="text-[22px] font-semibold tracking-[-0.01em]">{group.student}</span>
+                    <span className="text-sm text-[var(--eb-text-muted)]">{groupSummary(groupItems)}</span>
                   </div>
-                  <button type="button" onClick={() => onViewStudent(selected.student_id)}
+                  <button type="button" onClick={() => onViewStudent(group.studentId)}
                     className="min-h-11 text-sm text-[var(--eb-text-soft)] underline underline-offset-4 hover:text-[var(--eb-light)]">
-                    Open {firstName(selected.student)}’s progress
+                    Open {firstName(group.student)}’s progress
                   </button>
                 </div>
 
-                <div className="flex flex-wrap items-stretch gap-5">
-                  <div className="flex min-w-0 flex-[1_1_220px] flex-col gap-2.5 pt-2">
+                {groupItems.length > 1 && (
+                  <div role="group" aria-label={`${firstName(group.student)}’s items`} className="flex flex-wrap gap-2">
+                    {groupItems.map(item => {
+                      const on = item.id === selected.id;
+                      return (
+                        <button key={item.id} type="button" onClick={() => setSelectedItemId(item.id)} aria-pressed={on}
+                          className={`min-h-10 rounded-lg border px-3 text-sm transition-colors duration-200 ${on
+                            ? "border-[var(--eb-text)] bg-[var(--eb-text)] font-semibold text-[var(--eb-ink)]"
+                            : `border-[var(--eb-line)] text-[var(--eb-text-soft)] hover:border-[var(--eb-text-muted)] hover:text-[var(--eb-text)]${isAssigned(item) ? " opacity-60" : ""}`}`}
+                        >
+                          {item.concept}{isAssigned(item) ? ", assigned" : ""}
+                        </button>
+                      );
+                    })}
+                  </div>
+                )}
+
+                <div key={selected.id} className="flex flex-wrap items-stretch gap-5">
+                  <div className={`flex min-w-0 flex-col gap-2.5 ${hasPassage ? "flex-[1_1_220px] pt-2" : "flex-1"}`}>
+                    <span className="text-sm text-[var(--eb-text-muted)]">
+                      {[SOURCE_LABEL[selected.source], itemWhen(selected)].filter(Boolean).join(". ")}
+                    </span>
                     {selected.student_evidence ? (
                       <>
-                        <span className="text-sm text-[var(--eb-text-muted)]">{firstName(selected.student)} wrote</span>
+                        <span className="text-sm text-[var(--eb-text-muted)]">{firstName(group.student)} wrote</span>
                         <p className="m-0 text-[24px] font-medium leading-[1.35] tracking-[-0.01em] text-[#A7DDD6]">“{selected.student_evidence}”</p>
                       </>
                     ) : (
                       <>
-                        <span className="text-sm text-[var(--eb-text-muted)]">Why this is here</span>
-                        <p className="m-0 text-[18px] leading-[1.5] text-[var(--eb-text)]">{selected.reason}</p>
+                        <span className="text-[19px] font-semibold">{selected.concept}</span>
+                        <p className="m-0 max-w-[60ch] text-[16px] leading-[1.55] text-[var(--eb-text-soft)]">{selected.reason}</p>
                       </>
                     )}
                     {selected.downstream_concept && (
                       <p className="m-0 text-sm text-[var(--eb-text-muted)]">This may be holding back {selected.downstream_concept}.</p>
                     )}
                   </div>
-                  <CorrectingPassage courseId={courseId} item={selected} />
+                  {hasPassage && <CorrectingPassage courseId={courseId} item={selected} />}
                 </div>
 
                 <div className="flex flex-col gap-3.5 rounded-[14px] border border-[var(--eb-line)] bg-[rgba(39,51,63,0.82)] px-5 py-5 backdrop-blur-[6px]">
@@ -275,13 +338,13 @@ export default function TodayStage({ courseId, analytics, loading, accessToken, 
                   {isAssigned(selected) ? (
                     <div role="status" className="eb-rise flex flex-wrap items-center gap-3">
                       <span aria-hidden="true" className="flex h-[26px] w-[26px] items-center justify-center rounded-full bg-[#A7DDD6] text-[var(--eb-ink)]"><Check size={14} strokeWidth={3} /></span>
-                      <span>Practice on {selected.concept} is assigned to {firstName(selected.student)}.</span>
+                      <span>Practice on {selected.concept} is assigned to {firstName(group.student)}.</span>
                     </div>
                   ) : (
                     <div className="flex flex-wrap gap-2.5">
                       <button type="button" onClick={() => onAssign(selected)} disabled={assigningId === selected.id}
                         className="min-h-[46px] rounded-[10px] bg-[var(--eb-light)] px-[18px] font-bold text-[var(--eb-ink)] shadow-[0_0_28px_var(--eb-light-glow)] disabled:opacity-60">
-                        {assigningId === selected.id ? "Assigning…" : `Assign practice to ${firstName(selected.student)}`}
+                        {assigningId === selected.id ? "Assigning…" : `Assign practice on ${selected.concept}`}
                       </button>
                       <button type="button" onClick={() => onDraft(selected)}
                         className="inline-flex min-h-[46px] items-center gap-2 rounded-[10px] border border-[#44525F] px-4 text-[var(--eb-text)] hover:bg-[var(--eb-raised)]">
@@ -311,24 +374,24 @@ export default function TodayStage({ courseId, analytics, loading, accessToken, 
             )}
           </div>
           <div role="group" aria-label="Filter by concept" className="flex flex-wrap gap-4">
-            {concepts.map(group => {
-              const on = concept === group.name;
-              const share = group.students.size / maxStudents;
+            {concepts.map(entry => {
+              const on = concept === entry.name;
+              const share = entry.students.size / maxStudents;
               const bar = `rgba(240,185,74,${(0.35 + 0.65 * share).toFixed(2)})`;
               return (
-                <button key={group.name} type="button" onClick={() => setConcept(on ? null : group.name)} aria-pressed={on}
+                <button key={entry.name} type="button" onClick={() => { setConcept(on ? null : entry.name); setSelectedItemId(null); }} aria-pressed={on}
                   className={`flex min-w-0 flex-[1_1_200px] flex-col gap-3 rounded-xl border px-[18px] py-4 text-left transition-[box-shadow,background] duration-200 ${on
                     ? "border-[rgba(240,185,74,0.6)] bg-[var(--eb-raised)] shadow-[0_0_30px_-8px_rgba(240,185,74,0.45)]"
                     : "border-[var(--eb-line-soft)] bg-[#1A2430] hover:bg-[var(--eb-raised-2)]"}`}
                 >
                   <span className="flex justify-between gap-2.5">
-                    <span className="font-semibold">{group.name}</span>
-                    <span className="whitespace-nowrap text-sm text-[var(--eb-text-soft)]">{group.students.size} student{group.students.size === 1 ? "" : "s"}</span>
+                    <span className="font-semibold">{entry.name}</span>
+                    <span className="whitespace-nowrap text-sm text-[var(--eb-text-soft)]">{entry.students.size} student{entry.students.size === 1 ? "" : "s"}</span>
                   </span>
                   <span aria-hidden="true" className="block h-1.5 overflow-hidden rounded-[3px] bg-[var(--eb-line-soft)]">
                     <span className="block h-full rounded-[3px]" style={{ width: `${Math.round(share * 100)}%`, background: bar, boxShadow: `0 0 14px ${bar}` }} />
                   </span>
-                  {group.pages.size > 0 && <span className="text-[13px] text-[var(--eb-text-muted)]">{[...group.pages].slice(0, 3).join(", ")}</span>}
+                  {entry.pages.size > 0 && <span className="text-[13px] text-[var(--eb-text-muted)]">{[...entry.pages].slice(0, 3).join(", ")}</span>}
                 </button>
               );
             })}
