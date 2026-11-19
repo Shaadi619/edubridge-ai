@@ -24,3 +24,11 @@ Things to verify by hand before the redesign branch is merged. Tick each one off
 - [ ] A Show Your Work upload with a confident, course-backed misconception appears under "uploads to check"; "Agree, add to their record" and "Not a problem" both work.
 - [ ] Post an announcement (with and without "Keep it at the top") and delete it; students see it.
 - [ ] "Copy" copies the join code.
+
+## Sign-in, settings and brand
+
+- [ ] Student: Join Course finds a course by code, "Ask to join" sends a request, "Cancel request" works, and a code that doesn't exist shows the "No course has that code" message.
+- [ ] Student Settings: edit and save the profile, change quiz difficulty, flip both switches, and check each change survives a reload.
+- [ ] Teacher Settings: "Suggest topics" (uses AI tokens) shows topics and an order with ticks; "Keep the ticked ones" saves them; adding a topic, saving an order and removing it all work.
+- [ ] Sign up a new teacher and a new student end to end (sign-up, email confirmation if enabled, the "waiting for approval" screen, admin approval).
+- [ ] The favicon and phone home-screen icon show the uB monogram.

@@ -11,8 +11,11 @@ import type { Announcement, ChatMessage, HistoryStatus, StudentCourse } from "./
 import { useScopedQuery, useScopedRequest } from "./useScopedRequest";
 import { clearStudentSession, readStudentLocation, writeStudentLocation } from "../lib/studentSession";
 
+import { Wordmark } from "./components/Logo";
 const CitationPreview = lazy(() => import("./components/CitationPreview"));
 const Landing = lazy(() => import("./Landing"));
+const AuthScreen = lazy(() => import("./AuthScreen"));
+const JoinStage = lazy(() => import("./student/JoinStage"));
 const AskWorkspace = lazy(() => import("./student/AskWorkspace"));
 const TodayStage = lazy(() => import("./teacher/TodayStage"));
 const QuizStage = lazy(() => import("./student/QuizStage"));
@@ -307,262 +310,6 @@ function UploadModal({ onClose, onUploaded, onProcessed, courseId, courseName, u
 
 // ─── Student Enroll Tab ───────────────────────────────────────────────────
 
-type PendingRequest = { id: string; code: string; course: string; teacher: string; createdAt: string };
-type CourseLookupResult = { id: string; name: string; teacher: string; subject: string; enrollment_code: string; students: number; documents: number };
-
-function StudentEnroll({ courses }: { courses: StudentCourse[] }) {
-  const { session } = useAuth();
-  const [code, setCode] = useState("");
-  const [lookupState, setLookupState] = useState<"idle" | "looking" | "found" | "notfound" | "error">("idle");
-  const [lookupError, setLookupError] = useState("");
-  const [pendingRequests, setPendingRequests] = useState<PendingRequest[]>([]);
-  const [foundCourse, setFoundCourse] = useState<CourseLookupResult | null>(null);
-  const [submitting, setSubmitting] = useState(false);
-  const [submitted, setSubmitted] = useState(false);
-
-  const loadRequests = useCallback(async () => {
-    if (!session) return;
-    try {
-      const rows = await api.myEnrollments(session.access_token);
-      setPendingRequests(rows.filter(row => row.status === "pending").map(row => ({
-        id: row.id,
-        code: row.enrollment_code,
-        course: row.course_name,
-        teacher: row.teacher,
-        createdAt: row.created_at,
-      })));
-    } catch (error) {
-      toast.error(error instanceof Error ? error.message : "Could not load enrollment requests.");
-    }
-  }, [session]);
-
-  useEffect(() => { void loadRequests(); }, [loadRequests]);
-
-  const lookup = async () => {
-    if (code.trim().length < 3 || !session) return;
-    setLookupState("looking");
-    setLookupError("");
-    setFoundCourse(null);
-    try {
-      const match = await api.lookupCourse(code, session.access_token);
-      setFoundCourse(match);
-      setLookupState("found");
-    } catch (error) {
-      if (error instanceof ApiError && error.status === 404) {
-        setLookupState("notfound");
-      } else {
-        setLookupError(error instanceof Error ? error.message : "Course lookup is temporarily unavailable.");
-        setLookupState("error");
-      }
-    }
-  };
-
-  const requestAccess = async () => {
-    if (!foundCourse || !session) return;
-    setSubmitting(true);
-    try {
-      await api.requestEnrollment(foundCourse.id, session.access_token);
-      await loadRequests();
-      setSubmitted(true);
-      setCode("");
-      setLookupState("idle");
-      setFoundCourse(null);
-      toast.success(`Request sent to ${foundCourse.teacher}`);
-      setTimeout(() => setSubmitted(false), 200);
-    } catch (error) {
-      toast.error(error instanceof Error ? error.message : "Could not request enrollment.");
-    } finally {
-      setSubmitting(false);
-    }
-  };
-
-  const cancelRequest = async (request: PendingRequest) => {
-    if (!session) return;
-    try {
-      await api.cancelEnrollment(request.id, session.access_token);
-      setPendingRequests(prev => prev.filter(r => r.id !== request.id));
-      toast(`Request to join ${request.course} cancelled`);
-    } catch (error) {
-      toast.error(error instanceof Error ? error.message : "Could not cancel the request.");
-    }
-  };
-
-  const handleCodeChange = (v: string) => {
-    setCode(v.toUpperCase());
-    setLookupState("idle");
-    setLookupError("");
-    setFoundCourse(null);
-  };
-
-  return (
-    <div className="p-6 lg:p-8 max-w-xl mx-auto">
-      <div className="mb-8">
-        <h1 className="font-display text-2xl text-primary">Join a Course</h1>
-        <p className="text-sm text-muted-foreground mt-1 font-light">Enter the class code your teacher shared with you.</p>
-      </div>
-
-      {/* Code entry */}
-      <div className="bg-card border border-border rounded-2xl p-6 shadow-sm mb-5">
-        <label className="text-sm font-medium text-foreground block mb-2">Class Code</label>
-        <div className="flex gap-3 mb-3">
-          <input
-            value={code}
-            onChange={e => handleCodeChange(e.target.value)}
-            onKeyDown={e => e.key === "Enter" && lookupState === "idle" && void lookup()}
-            placeholder="e.g. BIO-3F8K"
-            className="flex-1 border border-border rounded-xl px-4 py-3 text-sm font-mono bg-background focus:outline-none focus:ring-2 focus:ring-ring tracking-widest uppercase"
-          />
-          <motion.button whileHover={{ scale: 1.02 }} whileTap={{ scale: 0.97 }}
-            onClick={() => void lookup()}
-            disabled={code.length < 3 || lookupState === "looking" || lookupState === "found"}
-            className="bg-primary text-primary-foreground px-5 py-3 rounded-xl text-sm font-semibold disabled:opacity-40 shadow-sm min-w-[100px]"
-          >
-            {lookupState === "looking" ? <RefreshCw size={15} className="animate-spin mx-auto" /> : "Look Up"}
-          </motion.button>
-        </div>
-
-        {/* Not found error */}
-        {lookupState === "notfound" && (
-          <motion.p initial={{ opacity: 0, y: -4 }} animate={{ opacity: 1, y: 0 }}
-            className="text-xs text-red-600 flex items-center gap-1.5 mb-2">
-            <AlertCircle size={12} />No course found with that code. Check for typos or ask your teacher.
-          </motion.p>
-        )}
-
-        {lookupState === "error" && (
-          <motion.p initial={{ opacity: 0, y: -4 }} animate={{ opacity: 1, y: 0 }}
-            className="text-xs text-amber-700 flex items-center gap-1.5 mb-2">
-            <AlertCircle size={12} />{lookupError}
-          </motion.p>
-        )}
-
-        {/* Course preview card */}
-        <AnimatePresence>
-          {lookupState === "found" && foundCourse && (
-            <motion.div
-              initial={{ opacity: 0, height: 0 }}
-              animate={{ opacity: 1, height: "auto" }}
-              exit={{ opacity: 0, height: 0 }}
-              transition={{ duration: 0.22 }}
-            >
-              <div className="mt-3 border border-emerald-200 bg-emerald-50/60 rounded-xl p-4">
-                <div className="flex items-start gap-3">
-                  <div className="w-10 h-10 rounded-xl bg-primary/10 flex items-center justify-center shrink-0">
-                    <BookOpen size={18} className="text-primary" />
-                  </div>
-                  <div className="flex-1 min-w-0">
-                    <div className="font-semibold text-foreground">{foundCourse.name}</div>
-                    <div className="text-xs text-muted-foreground font-light mt-0.5">{foundCourse.teacher} · {foundCourse.subject}</div>
-                    <div className="flex gap-4 mt-2 text-xs text-muted-foreground font-light">
-                      <span className="flex items-center gap-1"><Users size={11} />{foundCourse.students} students</span>
-                      <span className="flex items-center gap-1"><FileText size={11} />{foundCourse.documents} documents</span>
-                    </div>
-                  </div>
-                  <span className="text-xs font-mono text-emerald-700 bg-emerald-100 border border-emerald-200 px-2 py-0.5 rounded-md shrink-0">
-                    {code.toUpperCase()}
-                  </span>
-                </div>
-              </div>
-              <div className="flex gap-3 mt-3">
-                <motion.button whileHover={{ scale: 1.01 }} whileTap={{ scale: 0.98 }}
-                  onClick={() => void requestAccess()}
-                  disabled={submitting || pendingRequests.some(r => r.code === code.toUpperCase())}
-                  className="flex-1 bg-primary text-primary-foreground py-3 rounded-xl text-sm font-semibold shadow-sm disabled:opacity-50 flex items-center justify-center gap-2"
-                >
-                  {submitting
-                    ? <><RefreshCw size={14} className="animate-spin" />Sending…</>
-                    : pendingRequests.some(r => r.code === code.toUpperCase())
-                    ? <><CheckCircle size={14} />Already requested</>
-                    : <>Request Access to {foundCourse.name}</>}
-                </motion.button>
-                <button onClick={() => { setLookupState("idle"); setCode(""); setFoundCourse(null); }}
-                  className="px-4 py-3 border border-border rounded-xl text-sm text-muted-foreground hover:bg-muted transition-colors">
-                  Clear
-                </button>
-              </div>
-            </motion.div>
-          )}
-        </AnimatePresence>
-
-        <p className="text-xs text-muted-foreground mt-3 font-light">
-          Your teacher will be notified and can approve or deny your request.
-        </p>
-      </div>
-
-      {/* Pending requests */}
-      <AnimatePresence initial={false}>
-        {pendingRequests.length > 0 && (
-          <motion.div
-            initial={{ opacity: 0, height: 0 }}
-            animate={{ opacity: 1, height: "auto" }}
-            exit={{ opacity: 0, height: 0 }}
-            className="mb-5"
-          >
-            <div className="bg-card border border-border rounded-xl overflow-hidden shadow-sm">
-              <div className="px-5 py-3.5 border-b border-border flex items-center gap-2">
-                <h3 className="font-semibold text-foreground text-sm">Pending Requests</h3>
-                <span className="text-xs font-bold bg-amber-100 text-amber-700 border border-amber-200 px-1.5 py-0.5 rounded-full">
-                  {pendingRequests.length}
-                </span>
-              </div>
-              {pendingRequests.map(r => (
-                <motion.div key={r.id} layout
-                  exit={{ opacity: 0, height: 0 }}
-                  transition={{ duration: 0.2 }}
-                  className="flex items-center gap-3 px-5 py-4 border-b border-border last:border-0"
-                >
-                  <div className="w-9 h-9 rounded-xl bg-amber-50 flex items-center justify-center shrink-0">
-                    <Lock size={15} className="text-amber-600" />
-                  </div>
-                  <div className="flex-1 min-w-0">
-                    <div className="text-sm font-medium text-foreground">{r.course}</div>
-                    <div className="text-xs text-muted-foreground font-light">{r.teacher} · <span className="font-mono">{r.code}</span></div>
-                  </div>
-                  <div className="flex items-center gap-3 shrink-0">
-                    <span className="text-xs text-muted-foreground font-mono flex items-center gap-1">
-                      <Clock size={10} />{relativeTime(r.createdAt)}
-                    </span>
-                    <span className="text-xs font-medium text-amber-700 bg-amber-50 border border-amber-200 px-2 py-0.5 rounded-full">
-                      Awaiting approval
-                    </span>
-                    <button onClick={() => void cancelRequest(r)}
-                      className="p-1.5 hover:bg-red-50 rounded-lg text-muted-foreground hover:text-red-500 transition-colors">
-                      <X size={13} />
-                    </button>
-                  </div>
-                </motion.div>
-              ))}
-            </div>
-          </motion.div>
-        )}
-      </AnimatePresence>
-
-      {/* Enrolled courses */}
-      <div className="bg-muted/50 border border-border rounded-xl p-5">
-        <h3 className="text-xs font-mono uppercase tracking-wide text-muted-foreground mb-4">My Enrolled Courses</h3>
-        <div className="space-y-2">
-          {courses.map(c => (
-            <div key={c.code} className="flex items-center gap-3 bg-card border border-border rounded-xl px-4 py-3.5 shadow-sm">
-              <div className="w-9 h-9 rounded-xl bg-emerald-50 flex items-center justify-center shrink-0">
-                <BookOpen size={16} className="text-emerald-600" />
-              </div>
-              <div className="flex-1 min-w-0">
-                <div className="text-sm font-medium text-foreground">{c.name}</div>
-                <div className="text-xs text-muted-foreground font-light">{c.teacher} · <span className="font-mono">{c.code}</span></div>
-              </div>
-              <div className="text-right shrink-0">
-                <div className="flex items-center gap-1.5 text-xs font-medium text-emerald-700 justify-end">
-                  <Unlock size={12} />Active
-                </div>
-              </div>
-            </div>
-          ))}
-          {courses.length === 0 && <p className="text-sm text-muted-foreground">No approved courses yet. Your approved courses will appear here.</p>}
-        </div>
-      </div>
-    </div>
-  );
-}
 
 // ─── Notifications Panel ─────────────────────────────────────────────────
 
@@ -783,142 +530,6 @@ function NotificationsPanel({ open, onClose, notifications, setNotifications, on
 
 // ─── Auth ─────────────────────────────────────────────────────────────────
 
-function Auth({ role, setRole, onBack }: {
-  role: "teacher" | "student"; setRole: (r: "teacher" | "student") => void;
-  onBack: () => void;
-}) {
-  const { configured, signIn, signUp } = useAuth();
-  const [mode, setMode] = useState<"login" | "signup">("signup");
-  const [displayName, setDisplayName] = useState("");
-  const [email, setEmail] = useState("");
-  const [password, setPassword] = useState("");
-  const [classCode, setClassCode] = useState("");
-  const [submitting, setSubmitting] = useState(false);
-
-  const submit = async () => {
-    if (!configured) {
-      toast.error("Add the Supabase URL and publishable key to apps/web/.env first.");
-      return;
-    }
-    if (!email.trim() || !password) {
-      toast.error("Enter your email address and password.");
-      return;
-    }
-    if (mode === "signup" && !displayName.trim()) {
-      toast.error("Enter your full name.");
-      return;
-    }
-    if (mode === "signup" && password.length < 8) {
-      toast.error("Use a password with at least 8 characters.");
-      return;
-    }
-
-    setSubmitting(true);
-    try {
-      if (mode === "login") {
-        await signIn(email.trim(), password);
-        toast.success("Signed in successfully.");
-      } else {
-        const result = await signUp({
-          email: email.trim(),
-          password,
-          displayName: displayName.trim(),
-          role,
-        });
-        if (classCode.trim()) {
-          sessionStorage.setItem("edubridge_pending_class_code", classCode.trim().toUpperCase());
-        }
-        if (result.requiresEmailVerification) {
-          toast.success("Account created. Check your email to verify your address.");
-          setMode("login");
-        } else {
-          toast.success(role === "teacher" ? "Teacher account created and awaiting approval." : "Account created.");
-        }
-      }
-    } catch (error) {
-      toast.error(error instanceof Error ? error.message : "Authentication failed.");
-    } finally {
-      setSubmitting(false);
-    }
-  };
-
-  return (
-    <div className="min-h-screen bg-background flex">
-      <div className="hidden lg:flex flex-col bg-primary text-primary-foreground w-96 p-12 shrink-0">
-        <button onClick={onBack} className="text-primary-foreground/50 hover:text-primary-foreground text-sm mb-auto flex items-center gap-2 transition-colors w-fit">← Back to Home</button>
-        <div>
-          <span className="font-display text-2xl">EduBridge AI</span>
-          <p className="text-primary-foreground/50 text-sm mt-3 leading-relaxed font-light">Misconception-aware academic support for students and teachers.</p>
-        </div>
-        <div className="mt-12 space-y-4">
-          {["Course-grounded answers with citations", "Adaptive quizzes targeting weak areas", "Real-time misconception detection", "Class-wide insight reports for teachers"].map(f => (
-            <div key={f} className="flex items-start gap-3 text-sm text-primary-foreground/60 font-light">
-              <CheckCircle size={15} className="text-accent mt-0.5 shrink-0" />{f}
-            </div>
-          ))}
-        </div>
-      </div>
-      <div className="flex-1 flex flex-col items-center justify-center p-8">
-        <div className="w-full max-w-sm">
-          <button onClick={onBack} className="lg:hidden text-sm text-muted-foreground hover:text-foreground mb-6 flex items-center gap-1 transition-colors">← Back</button>
-          <div className="mb-8">
-            <h1 className="font-display text-3xl text-primary mb-2">{mode === "signup" ? "Create your account" : "Welcome back"}</h1>
-            <p className="text-muted-foreground text-sm font-light">{mode === "signup" ? "Join EduBridge AI to get started." : "Sign in to continue."}</p>
-          </div>
-          <div className="flex bg-muted rounded-lg p-1 mb-6 gap-1">
-            {(["teacher", "student"] as const).map(r => (
-              <button key={r} onClick={() => setRole(r)} className={`relative flex-1 py-2 text-sm font-medium rounded-md transition-colors capitalize ${role === r ? "text-foreground" : "text-muted-foreground hover:text-foreground"}`}>
-                {role === r && <motion.div layoutId="auth-role-indicator" className="absolute inset-0 bg-card shadow-sm rounded-md" transition={{ type: "spring", bounce: 0.2, duration: 0.35 }} />}
-                <span className="relative z-10">{r === "teacher" ? "🎓 Teacher" : "📚 Student"}</span>
-              </button>
-            ))}
-          </div>
-          <div className="space-y-4 mb-6">
-            {mode === "signup" && (
-              <div>
-                <label className="text-sm font-medium text-foreground block mb-1.5">Full name</label>
-                <input value={displayName} onChange={e => setDisplayName(e.target.value)} autoComplete="name" className="w-full border border-border rounded-lg px-3.5 py-2.5 text-sm bg-card focus:outline-none focus:ring-2 focus:ring-ring" placeholder={role === "teacher" ? "Dr. Sarah Chen" : "Amara Osei"} />
-              </div>
-            )}
-            <div>
-              <label className="text-sm font-medium text-foreground block mb-1.5">Email address</label>
-              <input type="email" value={email} onChange={e => setEmail(e.target.value)} autoComplete="email" className="w-full border border-border rounded-lg px-3.5 py-2.5 text-sm bg-card focus:outline-none focus:ring-2 focus:ring-ring" placeholder={role === "teacher" ? "sarah@university.edu" : "amara@student.edu"} />
-            </div>
-            <div>
-              <label className="text-sm font-medium text-foreground block mb-1.5">Password</label>
-              <input type="password" value={password} onChange={e => setPassword(e.target.value)} autoComplete={mode === "signup" ? "new-password" : "current-password"} onKeyDown={e => { if (e.key === "Enter") void submit(); }} className="w-full border border-border rounded-lg px-3.5 py-2.5 text-sm bg-card focus:outline-none focus:ring-2 focus:ring-ring" placeholder="••••••••" />
-            </div>
-            <AnimatePresence>
-              {mode === "signup" && role === "student" && (
-                <motion.div initial={{ opacity: 1, height: "auto" }} exit={{ opacity: 0, height: 0 }} transition={{ duration: 0.2 }}>
-                  <label className="text-sm font-medium text-foreground block mb-1.5">Class code <span className="text-muted-foreground font-normal">(optional)</span></label>
-                  <input value={classCode} onChange={e => setClassCode(e.target.value)} className="w-full border border-border rounded-lg px-3.5 py-2.5 text-sm bg-card focus:outline-none focus:ring-2 focus:ring-ring font-mono" placeholder="BIO-3F8K" />
-                </motion.div>
-              )}
-            </AnimatePresence>
-          </div>
-          {!configured && (
-            <div className="mb-4 rounded-lg border border-amber-200 bg-amber-50 px-3.5 py-3 text-xs text-amber-800">
-              Authentication setup is incomplete. Add your Supabase project URL and publishable key to <span className="font-mono">apps/web/.env</span>.
-            </div>
-          )}
-          <motion.button whileHover={{ scale: 1.01 }} whileTap={{ scale: 0.98 }} onClick={() => void submit()} disabled={submitting}
-            className="w-full bg-primary text-primary-foreground font-semibold py-3 rounded-lg shadow-sm disabled:opacity-60 disabled:cursor-not-allowed"
-          >
-            {submitting ? "Please wait…" : mode === "signup" ? `Create ${role} account` : "Sign in"}
-          </motion.button>
-          <p className="text-center text-sm text-muted-foreground mt-5 font-light">
-            {mode === "signup" ? "Already have an account?" : "Don't have an account?"}{" "}
-            <button onClick={() => setMode(mode === "signup" ? "login" : "signup")} className="text-accent font-medium hover:underline">
-              {mode === "signup" ? "Sign in" : "Sign up"}
-            </button>
-          </p>
-        </div>
-      </div>
-    </div>
-  );
-}
-
 // ─── Sidebar ──────────────────────────────────────────────────────────────
 
 function Sidebar<T extends string>({
@@ -931,10 +542,10 @@ function Sidebar<T extends string>({
 }) {
   return (
     <>
-      <aside className={`fixed inset-y-0 left-0 z-40 w-64 bg-primary text-primary-foreground flex flex-col transition-transform duration-300 lg:translate-x-0 ${open ? "translate-x-0" : "-translate-x-full"}`}>
-        <div className="p-6 border-b border-primary-foreground/10">
-          <span className="font-display text-xl">{title}</span>
-          <div className="mt-1 text-xs text-primary-foreground/40 font-mono">{subtitle}</div>
+      <aside className={`fixed inset-y-0 left-0 z-40 w-64 bg-[#0C1730] text-primary-foreground flex flex-col transition-transform duration-300 lg:translate-x-0 ${open ? "translate-x-0" : "-translate-x-full"}`}>
+        <div className="flex flex-col gap-2 border-b border-primary-foreground/10 px-6 pb-5 pt-6">
+          <Wordmark width={150} />
+          <span className="text-[13px] text-primary-foreground/55">{subtitle}</span>
         </div>
         {extra}
         <nav className="flex-1 p-4 space-y-0.5">
@@ -1226,7 +837,7 @@ function TeacherDashboard({ onLogout, darkMode, setDarkMode }: { onLogout: () =>
 
   return (
     <div className="min-h-screen flex bg-background">
-      <Sidebar title="EduBridge AI" subtitle="Teacher Portal" initials={initialsFor(profile?.display_name)} name={profile?.display_name ?? "Teacher"} role="teacher"
+      <Sidebar title="EduBridge AI" subtitle="For teachers" initials={initialsFor(profile?.display_name)} name={profile?.display_name ?? "Teacher"} role="teacher"
         items={navItems} activeTab={tab} setTab={setTab} onLogout={onLogout} open={sidebarOpen} setOpen={setSidebarOpen} />
       <div className="flex-1 min-w-0 lg:ml-64 flex flex-col min-h-screen">
         <header className="sticky top-0 z-20 w-full min-w-0 bg-background/95 backdrop-blur-sm border-b border-border h-14 flex items-center px-4 lg:px-6 gap-3">
@@ -1312,7 +923,7 @@ function TeacherDashboard({ onLogout, darkMode, setDarkMode }: { onLogout: () =>
             >
               <Plus size={11} />New Course
             </motion.button>
-            <button onClick={() => { setNotifOpen(v => !v); setCourseMenuOpen(false); }} className="relative p-2 hover:bg-muted rounded-lg transition-colors">
+            <button onClick={() => { setNotifOpen(v => !v); setCourseMenuOpen(false); }} aria-label={unreadCount ? `Notifications, ${unreadCount} unread` : "Notifications"} className="relative p-2 hover:bg-muted rounded-lg transition-colors">
               <Bell size={16} />
               {unreadCount > 0 && (
                 <span className="absolute top-1 right-1 w-4 h-4 bg-accent rounded-full text-accent-foreground text-[9px] font-bold flex items-center justify-center">
@@ -1320,7 +931,7 @@ function TeacherDashboard({ onLogout, darkMode, setDarkMode }: { onLogout: () =>
                 </span>
               )}
             </button>
-            <div className="w-8 h-8 rounded-full bg-primary flex items-center justify-center text-primary-foreground text-xs font-bold">SC</div>
+            <div title={profile?.display_name ?? "You"} aria-hidden="true" className="w-8 h-8 rounded-full bg-primary flex items-center justify-center text-primary-foreground text-xs font-bold">{initialsFor(profile?.display_name)}</div>
           </div>
         </header>
         <main className="flex-1 min-w-0 max-w-full overflow-x-hidden p-4 sm:p-6 lg:p-8">
@@ -1878,11 +1489,11 @@ function StudentDashboard({ onLogout, darkMode, setDarkMode }: { onLogout: () =>
 
   return (
     <div className="min-h-screen flex bg-background">
-      <Sidebar title="EduBridge AI" subtitle="Student Portal" initials={initialsFor(profile?.display_name)} name={profile?.display_name ?? "Student"} role="student"
+      <Sidebar title="EduBridge AI" subtitle="For students" initials={initialsFor(profile?.display_name)} name={profile?.display_name ?? "Student"} role="student"
         items={navItems} activeTab={tab} setTab={setTab} onLogout={onLogout} open={sidebarOpen} setOpen={setSidebarOpen}
         extra={courseExtra} />
       <div className="flex-1 min-w-0 lg:ml-64 flex flex-col min-h-screen">
-        <header className={`sticky top-0 z-20 backdrop-blur-sm border-b h-14 flex items-center px-6 gap-4 ${tab === "workspace" || tab === "quiz" || tab === "progress" || tab === "work" ? "eb-stage-header" : "bg-background/95 border-border"}`}>
+        <header className={`sticky top-0 z-20 backdrop-blur-sm border-b h-14 flex items-center px-6 gap-4 ${tab === "workspace" || tab === "quiz" || tab === "progress" || tab === "work" || tab === "enroll" || tab === "settings" ? "eb-stage-header" : "bg-background/95 border-border"}`}>
           <button className="lg:hidden" aria-label="Open menu" onClick={() => setSidebarOpen(true)}><Menu size={20} /></button>
           <h1 className="font-semibold text-foreground text-sm">
             {tab === "workspace" && `Course Q&A${selectedCourse ? ` — ${selectedCourse.name}` : ""}`}
@@ -1935,7 +1546,7 @@ function StudentDashboard({ onLogout, darkMode, setDarkMode }: { onLogout: () =>
                     </Suspense>
                   )} />
               </Suspense>}
-              {tab === "enroll" && <StudentEnroll courses={studentCourses} />}
+              {tab === "enroll" && <Suspense fallback={<div role="status" className="eb-stage min-h-[calc(100vh-3.5rem)] p-10 text-sm text-[#A9B6C2]">Opening…</div>}><JoinStage courses={studentCourses} /></Suspense>}
               {tab === "settings" && <StudentSettings courses={studentCourses} darkMode={darkMode} setDarkMode={setDarkMode} />}
             </motion.div>
           </AnimatePresence>
@@ -2209,12 +1820,12 @@ type StoredPreferences = {
   misconceptionAlerts?: boolean;
 };
 
-function SettingsToggle({ on, onToggle }: { on: boolean; onToggle: () => void }) {
-  return <button type="button" aria-pressed={on} onClick={onToggle}
-    className={`relative rounded-full transition-colors shrink-0 ${on ? "bg-primary" : "bg-muted border border-border"}`}
-    style={{ width: "40px", height: "22px" }}>
-    <motion.div animate={{ x: on ? 20 : 2 }} transition={{ type: "spring", stiffness: 500, damping: 30 }}
-      className="absolute top-[3px] w-4 h-4 rounded-full bg-white shadow-sm" />
+function SettingsToggle({ on, onToggle, labelledBy }: { on: boolean; onToggle: () => void; labelledBy?: string }) {
+  return <button type="button" role="switch" aria-checked={on} aria-labelledby={labelledBy} onClick={onToggle}
+    className="relative h-6 w-11 shrink-0 rounded-full transition-colors"
+    style={{ background: on ? "var(--eb-text, #E7EDF2)" : "var(--eb-line, #34414F)" }}>
+    <span className="absolute left-0 top-0.5 h-5 w-5 rounded-full shadow transition-transform"
+      style={{ background: on ? "var(--eb-ink, #1E2A36)" : "var(--eb-text-soft, #C9D3DC)", transform: `translateX(${on ? 22 : 2}px)` }} />
   </button>;
 }
 
@@ -2289,9 +1900,9 @@ function TeacherSettings({ courses, darkMode, setDarkMode, onShowWorkChange }: {
     const { error } = await supabase.from("course_topic_prerequisites").insert({
       course_id: graphCourseId, topic_id: dependentId, prerequisite_topic_id: prerequisiteId,
     });
-    if (error) { toast.error(error.message.includes("cycle") ? "That relationship would create a circular prerequisite." : error.message); return; }
+    if (error) { toast.error(error.message.includes("cycle") ? "That would make a loop: one of these topics already comes before the other." : error.message); return; }
     await loadPrerequisiteGraph();
-    toast.success("Prerequisite relationship added");
+    toast.success("Order saved");
   };
 
   const addGraphTopic = async () => {
@@ -2306,7 +1917,7 @@ function TeacherSettings({ courses, darkMode, setDarkMode, onShowWorkChange }: {
     }
     setNewTopicName("");
     await loadPrerequisiteGraph();
-    toast.success("Course topic added");
+    toast.success("Topic added");
   };
 
   const suggestGraph = async () => {
@@ -2317,9 +1928,9 @@ function TeacherSettings({ courses, darkMode, setDarkMode, onShowWorkChange }: {
       setGraphSuggestion(suggestion);
       setSelectedSuggestedTopics(new Set(suggestion.topics.filter(topic => topic.confidence >= 0.65).map(topic => suggestionKey(topic.name))));
       setSelectedSuggestedLinks(new Set(suggestion.relationships.filter(link => link.confidence >= 0.75).map(link => relationshipKey(link.prerequisite, link.topic))));
-      toast.success("Grounded graph suggestions are ready for review");
+      toast.success("Suggestions are ready. Tick the ones you want to keep.");
     } catch (error) {
-      toast.error(error instanceof Error ? error.message : "Could not analyze the course documents.");
+      toast.error(error instanceof Error ? error.message : "Your material couldn’t be read for suggestions. Try again.");
     } finally {
       setSuggestingGraph(false);
     }
@@ -2369,7 +1980,7 @@ function TeacherSettings({ courses, darkMode, setDarkMode, onShowWorkChange }: {
       const result = await api.applyCourseGraph(graphCourseId, topics, relationships, session.access_token);
       await loadPrerequisiteGraph();
       setGraphSuggestion(null);
-      toast.success(`Applied ${result.topics_added} new topic${result.topics_added === 1 ? "" : "s"} and ${result.relationships_added} relationship${result.relationships_added === 1 ? "" : "s"}`);
+      toast.success(`Kept ${result.topics_added} new topic${result.topics_added === 1 ? "" : "s"} and ${result.relationships_added} step${result.relationships_added === 1 ? "" : "s"} in the order`);
     } catch (error) {
       toast.error(error instanceof Error ? error.message : "Could not apply the selected suggestions.");
     } finally {
@@ -2422,131 +2033,208 @@ function TeacherSettings({ courses, darkMode, setDarkMode, onShowWorkChange }: {
   };
 
   const preferenceRows: Array<{ key: keyof StoredPreferences; label: string; desc: string }> = [
-    { key: "enrollments", label: "Enrollment requests", desc: "When a student requests to join your course" },
-    { key: "flags", label: "Struggling student alerts", desc: "When a student needs additional support" },
-    { key: "misconceptions", label: "Misconception alerts", desc: "When a misunderstanding is detected" },
+    { key: "enrollments", label: "A student asks to join", desc: "So you can let them in quickly." },
+    { key: "flags", label: "A student is struggling", desc: "For example, low quiz scores or overdue study tasks." },
+    { key: "misconceptions", label: "A mistake is spotted", desc: "When the tutor, a quiz or an explanation shows a misunderstanding." },
   ];
 
-  return <div className="p-6 lg:p-8 max-w-2xl mx-auto text-foreground">
-    <div className="mb-8"><h1 className="font-display text-2xl text-foreground">Settings</h1><p className="text-sm text-muted-foreground mt-1">Manage your real profile and preferences.</p></div>
+  const sectionTitle = "m-0 text-[19px] font-semibold tracking-[-0.01em]";
+  const note = "m-0 text-sm leading-relaxed text-[var(--eb-text-muted)]";
+  const field = "w-full min-h-11 rounded-xl border border-[var(--eb-line)] bg-[var(--eb-raised-2)] px-4 text-[15px] text-[var(--eb-text)] focus:border-[var(--eb-text-muted)] focus:outline-none";
+  const primary = "min-h-10 rounded-lg bg-[var(--eb-text)] px-4 text-sm font-semibold text-[var(--eb-ink)] disabled:opacity-40";
+  const quiet = "min-h-10 rounded-lg border border-[var(--eb-line)] px-3 text-sm text-[var(--eb-text-soft)] hover:border-[var(--eb-text-muted)] hover:text-[var(--eb-text)] disabled:opacity-40";
+  const chip = (on: boolean) => `min-h-9 rounded-lg px-3 text-sm transition-colors ${on ? "bg-[var(--eb-text)] font-semibold text-[var(--eb-ink)]" : "border border-[var(--eb-line)] text-[var(--eb-text-soft)] hover:text-[var(--eb-text)]"}`;
+  const where = (citation: { document_title: string; page_number: number | null; source_kind: string }) =>
+    `${citation.document_title.replace(/\.(pdf|pptx?|docx?)$/i, "")}${citation.page_number ? `, ${citation.source_kind === "slide" ? "slide" : "page"} ${citation.page_number}` : ""}`;
 
-    <section className="bg-card border border-border rounded-2xl p-6 shadow-sm mb-5">
-      <div className="flex justify-between mb-5"><h2 className="font-semibold">Profile</h2><button onClick={() => setEditing(value => !value)} className="text-xs flex gap-1.5 items-center text-muted-foreground"><Pencil size={12} />{editing ? "Cancel" : "Edit"}</button></div>
-      <div className="flex gap-4">
-        <div className="w-16 h-16 rounded-2xl bg-primary text-primary-foreground flex items-center justify-center font-display text-xl shrink-0">{initialsFor(account?.display_name)}</div>
-        <div className="flex-1 space-y-3">
-          {editing ? <>
-            <input value={details.name} onChange={event => setDetails(value => ({ ...value, name: event.target.value }))} placeholder="Full name" className="w-full border border-border rounded-xl px-3 py-2 text-sm bg-background text-foreground" />
-            <input value={details.headline} onChange={event => setDetails(value => ({ ...value, headline: event.target.value }))} placeholder="Title, e.g. Lecturer" className="w-full border border-border rounded-xl px-3 py-2 text-sm bg-background text-foreground" />
-            <input value={details.organization} onChange={event => setDetails(value => ({ ...value, organization: event.target.value }))} placeholder="Department or institution" className="w-full border border-border rounded-xl px-3 py-2 text-sm bg-background text-foreground" />
-            <button disabled={saving || !details.name.trim()} onClick={() => void saveProfile()} className="w-full bg-primary text-primary-foreground py-2.5 rounded-xl text-sm font-semibold disabled:opacity-50">{saving ? "Saving…" : "Save profile"}</button>
-          </> : <>
-            <div className="font-semibold">{account?.display_name}</div>
-            <div className="text-sm text-muted-foreground">{account?.headline || "Teacher"}{account?.organization ? ` · ${account.organization}` : ""}</div>
-            <div className="text-xs text-muted-foreground font-mono">{user?.email}</div>
-            <div className="text-[11px] text-muted-foreground">Email changes require a separate verification flow.</div>
-          </>}
-        </div>
-      </div>
-    </section>
+  return <section aria-label="Settings" className="eb-stage overflow-hidden rounded-2xl">
+    <header className="flex flex-col gap-1.5 px-6 pb-6 pt-7 sm:px-8">
+      <h1 className="m-0 text-[26px] font-semibold tracking-[-0.015em]">Settings</h1>
+      <p className="m-0 text-[15px] text-[var(--eb-text-soft)]">Your profile, your courses’ topics, and what you get notified about.</p>
+    </header>
 
-    <section className="bg-card border border-border rounded-2xl p-6 shadow-sm mb-5">
-      <h2 className="font-semibold mb-4">My Courses</h2>
-      <div className="space-y-3">{courses.map(course => <div key={course.id} className="p-4 bg-muted/40 rounded-xl flex flex-col gap-3">
-        <div className="flex justify-between gap-3">
-          <div><div className="text-sm font-medium">{course.name}</div><div className="text-xs text-muted-foreground">{course.subject} · <span className="font-mono">{course.code}</span></div></div>
-          <span className="text-xs text-emerald-700">Active</span>
+    <div className="flex flex-col divide-y divide-[var(--eb-line-soft)] border-t border-[var(--eb-line-soft)]">
+      <div className="flex flex-col gap-4 px-6 py-7 sm:px-8">
+        <div className="flex items-center justify-between gap-3">
+          <h2 className={sectionTitle}>Profile</h2>
+          <button type="button" onClick={() => setEditing(value => !value)} className={quiet}>{editing ? "Cancel" : "Edit"}</button>
         </div>
-        <div className="flex items-start justify-between gap-4 border-t border-border pt-3">
-          <div>
-            <div id={`show-work-${course.id}`} className="text-sm font-medium">Show Your Work</div>
-            <p className="text-xs text-muted-foreground mt-0.5 max-w-md">Students can upload a photo or PDF of their working for feedback. Useful for problem-solving courses. Flags only reach a student’s record after you approve them.</p>
+        {editing ? (
+          <form className="flex max-w-[480px] flex-col gap-3" onSubmit={event => { event.preventDefault(); void saveProfile(); }}>
+            <label className="flex flex-col gap-1.5"><span className="text-sm text-[var(--eb-text-soft)]">Full name</span><input value={details.name} onChange={event => setDetails(value => ({ ...value, name: event.target.value }))} className={field} /></label>
+            <label className="flex flex-col gap-1.5"><span className="text-sm text-[var(--eb-text-soft)]">Job title</span><input value={details.headline} onChange={event => setDetails(value => ({ ...value, headline: event.target.value }))} placeholder="For example, Lecturer" className={field} /></label>
+            <label className="flex flex-col gap-1.5"><span className="text-sm text-[var(--eb-text-soft)]">Department or school</span><input value={details.organization} onChange={event => setDetails(value => ({ ...value, organization: event.target.value }))} className={field} /></label>
+            <button type="submit" disabled={saving || !details.name.trim()} className={`${primary} self-start`}>{saving ? "Saving…" : "Save profile"}</button>
+          </form>
+        ) : (
+          <div className="flex flex-col gap-0.5">
+            <span className="text-[17px] font-semibold">{account?.display_name}</span>
+            <span className="text-[15px] text-[var(--eb-text-soft)]">{account?.headline || "Teacher"}{account?.organization ? `, ${account.organization}` : ""}</span>
+            <span className="text-sm text-[var(--eb-text-muted)]">{user?.email}</span>
           </div>
-          <button type="button" role="switch" aria-checked={course.showWork} aria-labelledby={`show-work-${course.id}`}
-            onClick={() => onShowWorkChange(course.id, !course.showWork)}
-            className={`relative mt-0.5 h-6 w-11 shrink-0 rounded-full transition-colors ${course.showWork ? "bg-primary" : "bg-muted-foreground/30"}`}>
-            <span className={`absolute left-0 top-0.5 h-5 w-5 rounded-full bg-white shadow transition-transform ${course.showWork ? "translate-x-[22px]" : "translate-x-0.5"}`} />
-          </button>
-        </div>
-      </div>)}{courses.length === 0 && <p className="text-sm text-muted-foreground">You have not created a course yet.</p>}</div>
-    </section>
-
-    <section className="bg-card border border-border rounded-2xl p-6 shadow-sm mb-5">
-      <h2 className="font-semibold mb-1">Course Prerequisite Graph</h2>
-      <p className="text-xs text-muted-foreground mb-5">Define what students should understand first. EduBridge will use these relationships to distinguish root weaknesses from downstream difficulties.</p>
-      {courses.length > 1 && <div className="flex flex-wrap gap-2 mb-5">{courses.map(course => <button key={course.id} onClick={() => setGraphCourseId(course.id)} className={`text-xs px-3 py-2 rounded-lg border ${graphCourseId === course.id ? "bg-primary text-primary-foreground border-primary" : "border-border hover:bg-muted"}`}>{course.name}</button>)}</div>}
-      <div className="rounded-xl border border-primary/20 bg-primary/5 p-4 mb-5">
-        <div className="flex items-start justify-between gap-4">
-          <div><div className="text-sm font-semibold text-foreground flex items-center gap-2"><Sparkles size={14} className="text-primary" />AI-assisted graph</div><p className="text-xs text-muted-foreground mt-1 leading-relaxed">Analyze indexed course documents and recommend cited concepts and prerequisites. You review every suggestion before anything is saved.</p></div>
-          <button onClick={() => void suggestGraph()} disabled={suggestingGraph || !graphCourseId || !session?.access_token} className="shrink-0 rounded-lg bg-primary text-primary-foreground px-4 py-2 text-xs font-semibold disabled:opacity-40 inline-flex items-center gap-2">{suggestingGraph ? <><RefreshCw size={12} className="animate-spin" />Analyzing…</> : <><Sparkles size={12} />Generate suggestions</>}</button>
-        </div>
-        <p className="text-[10px] text-muted-foreground mt-2">Runs only when clicked and uses AI tokens. Existing indexed text is reused; documents are not uploaded again.</p>
+        )}
       </div>
-      {graphSuggestion && <div className="rounded-xl border border-border bg-background p-4 mb-5 space-y-5">
-        <div><div className="flex items-center justify-between gap-3"><h3 className="text-sm font-semibold text-foreground">Review AI suggestions</h3><span className="text-[10px] text-muted-foreground">{graphSuggestion.documents_analyzed} document{graphSuggestion.documents_analyzed === 1 ? "" : "s"} · {graphSuggestion.excerpts_analyzed} excerpts</span></div><p className="text-xs text-muted-foreground mt-1 leading-relaxed">{graphSuggestion.summary}</p></div>
-        <div>
-          <div className="text-xs font-semibold text-foreground mb-2">Suggested topics</div>
-          <div className="space-y-2">{graphSuggestion.topics.map(topic => {
-            const selected = selectedSuggestedTopics.has(suggestionKey(topic.name));
-            return <button key={suggestionKey(topic.name)} onClick={() => toggleSuggestedTopic(topic.name)} className={`w-full text-left rounded-xl border p-3 transition-colors ${selected ? "border-primary bg-primary/5" : "border-border bg-card"}`}>
-              <div className="flex items-start gap-3"><span className={`mt-0.5 w-4 h-4 rounded border flex items-center justify-center shrink-0 ${selected ? "bg-primary border-primary text-primary-foreground" : "border-border"}`}>{selected && <CheckCheck size={10} />}</span><div className="flex-1 min-w-0"><div className="flex items-center justify-between gap-2"><span className="text-sm font-semibold text-foreground">{topic.name}</span><span className="text-[10px] text-muted-foreground">{Math.round(topic.confidence * 100)}% confidence</span></div><p className="text-xs text-muted-foreground mt-1">{topic.description}</p><div className="text-[10px] text-primary mt-1.5">{topic.citations.map(citation => `${citation.document_title}${citation.page_number ? ` — ${citation.source_kind} ${citation.page_number}` : ""}`).join(" · ")}</div></div></div>
-            </button>;
-          })}</div>
-        </div>
-        <div>
-          <div className="text-xs font-semibold text-foreground mb-2">Suggested prerequisite relationships</div>
-          <div className="space-y-2">{graphSuggestion.relationships.map(link => {
-            const key = relationshipKey(link.prerequisite, link.topic);
-            const selected = selectedSuggestedLinks.has(key);
-            return <button key={key} onClick={() => toggleSuggestedLink(link.prerequisite, link.topic)} className={`w-full text-left rounded-xl border p-3 transition-colors ${selected ? "border-emerald-300 bg-emerald-50" : "border-border bg-card"}`}>
-              <div className="flex items-start gap-3"><span className={`mt-0.5 w-4 h-4 rounded border flex items-center justify-center shrink-0 ${selected ? "bg-emerald-600 border-emerald-600 text-white" : "border-border"}`}>{selected && <CheckCheck size={10} />}</span><div className="flex-1 min-w-0"><div className="flex flex-wrap items-center gap-2 text-sm font-semibold text-foreground"><span>{link.prerequisite}</span><ArrowRight size={12} className="text-muted-foreground" /><span className="text-primary">{link.topic}</span><span className="text-[10px] font-normal text-muted-foreground ml-auto">{Math.round(link.confidence * 100)}% confidence</span></div><p className="text-xs text-muted-foreground mt-1">{link.reason}</p><div className="text-[10px] text-primary mt-1.5">{link.citations.map(citation => `${citation.document_title}${citation.page_number ? ` — ${citation.source_kind} ${citation.page_number}` : ""}`).join(" · ")}</div></div></div>
-            </button>;
-          })}{graphSuggestion.relationships.length === 0 && <p className="text-xs text-muted-foreground">The documents support concepts, but not a reliable prerequisite order. You can still approve topics and connect them manually.</p>}</div>
-        </div>
-        <div className="flex gap-2"><button onClick={() => setGraphSuggestion(null)} className="flex-1 rounded-lg border border-border px-4 py-2.5 text-xs font-semibold text-foreground">Discard suggestions</button><button onClick={() => void applySuggestedGraph()} disabled={applyingGraph || (selectedSuggestedTopics.size === 0 && selectedSuggestedLinks.size === 0)} className="flex-1 rounded-lg bg-primary text-primary-foreground px-4 py-2.5 text-xs font-semibold disabled:opacity-40">{applyingGraph ? "Applying…" : "Apply selected suggestions"}</button></div>
-      </div>}
-      <div className="rounded-xl border border-border bg-muted/30 p-4 mb-5">
-        <div className="text-xs font-semibold text-foreground mb-2">Course topics</div>
-        <div className="flex gap-2">
-          <input value={newTopicName} onChange={event => setNewTopicName(event.target.value)} onKeyDown={event => { if (event.key === "Enter") void addGraphTopic(); }} placeholder="Add a topic, e.g. Self-attention" aria-label="New course topic" className="flex-1 min-w-0 rounded-lg border border-border bg-background text-foreground px-3 py-2 text-sm" />
-          <button onClick={() => void addGraphTopic()} disabled={!newTopicName.trim() || addingTopic || !graphCourseId} className="rounded-lg bg-primary text-primary-foreground px-4 py-2 text-xs font-semibold disabled:opacity-40">{addingTopic ? "Adding…" : "Add topic"}</button>
-        </div>
-        {graphTopics.length > 0 && <div className="flex flex-wrap gap-2 mt-3">{graphTopics.map(topic => <span key={topic.id} className="rounded-full border border-border bg-card px-2.5 py-1 text-xs text-foreground">{topic.name}</span>)}</div>}
+
+      <div className="flex flex-col gap-4 px-6 py-7 sm:px-8">
+        <h2 className={sectionTitle}>Your courses</h2>
+        {courses.length === 0 ? <p className={note}>You haven’t created a course yet.</p> : (
+          <ul className="m-0 flex list-none flex-col p-0">
+            {courses.map(course => (
+              <li key={course.id} className="flex flex-col gap-3 border-b border-[var(--eb-line-soft)] py-4 last:border-0">
+                <span className="flex flex-wrap items-baseline justify-between gap-2">
+                  <span className="text-[16px] font-semibold">{course.name}</span>
+                  <span className="text-sm text-[var(--eb-text-muted)]">{course.subject}, join code {course.code}</span>
+                </span>
+                <span className="flex items-start justify-between gap-6">
+                  <span className="flex flex-col gap-1">
+                    <span id={`show-work-${course.id}`} className="text-[15px] font-medium">Show Your Work</span>
+                    <span className={`${note} max-w-[60ch]`}>Students can upload a photo or PDF of their working and get feedback on each step. Useful for problem-solving courses. Nothing goes on a student’s record unless you agree.</span>
+                  </span>
+                  <SettingsToggle on={course.showWork} labelledBy={`show-work-${course.id}`} onToggle={() => onShowWorkChange(course.id, !course.showWork)} />
+                </span>
+              </li>
+            ))}
+          </ul>
+        )}
       </div>
-      {graphLoading ? <div className="text-sm text-muted-foreground flex items-center gap-2"><RefreshCw size={14} className="animate-spin" />Loading topic graph…</div> : graphTopics.length < 2 ? <p className="text-sm text-muted-foreground">Add at least two topics above, then connect them in the order students should learn them.</p> : <>
-        <div className="grid md:grid-cols-2 gap-4 mb-4">
-          <div><div className="text-xs font-semibold text-foreground mb-2">1. Must understand first</div><div className="flex flex-wrap gap-2">{graphTopics.map(topic => <button key={topic.id} onClick={() => setPrerequisiteId(topic.id)} disabled={topic.id === dependentId} className={`text-xs px-3 py-2 rounded-lg border disabled:opacity-30 ${prerequisiteId === topic.id ? "bg-amber-100 text-amber-900 border-amber-300" : "border-border hover:bg-muted"}`}>{topic.name}</button>)}</div></div>
-          <div><div className="text-xs font-semibold text-foreground mb-2">2. Unlocks this concept</div><div className="flex flex-wrap gap-2">{graphTopics.map(topic => <button key={topic.id} onClick={() => setDependentId(topic.id)} disabled={topic.id === prerequisiteId} className={`text-xs px-3 py-2 rounded-lg border disabled:opacity-30 ${dependentId === topic.id ? "bg-primary text-primary-foreground border-primary" : "border-border hover:bg-muted"}`}>{topic.name}</button>)}</div></div>
+
+      <div className="flex flex-col gap-5 px-6 py-7 sm:px-8">
+        <div className="flex flex-col gap-1.5">
+          <h2 className={sectionTitle}>Topics and the order to learn them</h2>
+          <p className={`${note} max-w-[64ch]`}>List your course’s topics and say which ones students need first. EduBridge uses this to tell whether a student is stuck on a topic itself or on something it builds on.</p>
         </div>
-        <button onClick={() => void addPrerequisite()} disabled={!prerequisiteId || !dependentId} className="w-full bg-primary text-primary-foreground rounded-xl py-2.5 text-sm font-semibold disabled:opacity-40 mb-5">Add prerequisite relationship</button>
-        <div className="space-y-2">{graphLinks.map(link => {
-          const prerequisite = graphTopics.find(topic => topic.id === link.prerequisite_topic_id)?.name ?? "Topic";
-          const dependent = graphTopics.find(topic => topic.id === link.topic_id)?.name ?? "Topic";
-          return <div key={link.id} className="flex items-center gap-3 bg-muted/40 rounded-xl px-4 py-3"><span className="text-sm font-medium text-foreground">{prerequisite}</span><ArrowRight size={13} className="text-muted-foreground" /><span className="text-sm font-medium text-primary flex-1">{dependent}</span><button onClick={() => void removePrerequisite(link.id)} className="p-1.5 text-muted-foreground hover:text-red-600"><Trash2 size={13} /></button></div>;
-        })}{graphLinks.length === 0 && <p className="text-xs text-muted-foreground">No prerequisite relationships defined yet.</p>}</div>
-        {graphLinks.length > 0 && <div className="mt-4 rounded-xl border border-emerald-200 bg-emerald-50 px-4 py-3 text-xs text-emerald-900">Active: targeted quizzes will check the earliest required topic first and show the learning path to the student.</div>}
-      </>}
-    </section>
+        {courses.length > 1 && (
+          <div role="group" aria-label="Course" className="flex flex-wrap gap-1.5">
+            {courses.map(course => <button key={course.id} type="button" aria-pressed={graphCourseId === course.id} onClick={() => setGraphCourseId(course.id)} className={chip(graphCourseId === course.id)}>{course.name}</button>)}
+          </div>
+        )}
 
-    <section className="bg-card border border-border rounded-2xl p-6 shadow-sm mb-5">
-      <h2 className="font-semibold mb-1">Notification Preferences</h2><p className="text-xs text-muted-foreground mb-5">Saved to your account.</p>
-      <div className="space-y-4">{preferenceRows.map(item => <div key={item.key} className="flex justify-between gap-4"><div><div className="text-sm font-medium">{item.label}</div><div className="text-xs text-muted-foreground">{item.desc}</div></div><SettingsToggle on={Boolean(prefs[item.key])} onToggle={() => void persistPrefs({ ...prefs, [item.key]: !prefs[item.key] })} /></div>)}</div>
-      <div className="mt-5 rounded-xl border border-border bg-muted/40 px-4 py-3 text-xs text-muted-foreground">
-        Quiz summaries and weekly email delivery will be available after scheduled email delivery is configured.
+        <div className="flex flex-wrap items-center justify-between gap-4 rounded-xl border border-[var(--eb-line)] px-4 py-4">
+          <span className="flex max-w-[56ch] flex-col gap-1">
+            <span className="text-[15px] font-semibold">Suggest topics from my material</span>
+            <span className={note}>EduBridge reads your uploaded documents and suggests topics and an order, each with the page it came from. Uses AI tokens. Nothing is saved until you choose what to keep.</span>
+          </span>
+          <button type="button" onClick={() => void suggestGraph()} disabled={suggestingGraph || !graphCourseId || !session?.access_token} className={primary}>{suggestingGraph ? "Reading your material…" : "Suggest topics"}</button>
+        </div>
+
+        {graphSuggestion && (
+          <div className="eb-rise flex flex-col gap-5 rounded-xl border border-[var(--eb-line)] bg-[var(--eb-raised-2)] p-5">
+            <div className="flex flex-col gap-1">
+              <h3 className="m-0 text-[17px] font-semibold">Choose what to keep</h3>
+              <p className={note}>{graphSuggestion.summary} Based on {graphSuggestion.documents_analyzed} {graphSuggestion.documents_analyzed === 1 ? "document" : "documents"}.</p>
+            </div>
+            <fieldset className="m-0 flex flex-col gap-2 border-0 p-0">
+              <legend className="mb-2 text-[15px] font-semibold">Topics</legend>
+              {graphSuggestion.topics.map(topic => {
+                const selected = selectedSuggestedTopics.has(suggestionKey(topic.name));
+                return (
+                  <label key={suggestionKey(topic.name)} className="flex cursor-pointer items-start gap-3 rounded-lg px-2 py-2 hover:bg-[var(--eb-raised)]">
+                    <input type="checkbox" checked={selected} onChange={() => toggleSuggestedTopic(topic.name)} className="mt-1 h-4 w-4 shrink-0 accent-[#E7EDF2]" />
+                    <span className="flex flex-col gap-0.5">
+                      <span className="text-[15px] font-medium">{topic.name}</span>
+                      <span className="text-sm text-[var(--eb-text-soft)]">{topic.description}</span>
+                      {topic.citations.length > 0 && <span className="text-sm text-[var(--eb-text-muted)]">From {topic.citations.map(where).join("; ")}</span>}
+                    </span>
+                  </label>
+                );
+              })}
+            </fieldset>
+            <fieldset className="m-0 flex flex-col gap-2 border-0 p-0">
+              <legend className="mb-2 text-[15px] font-semibold">Order</legend>
+              {graphSuggestion.relationships.length === 0 && <p className={note}>Your material supports these topics but doesn’t make a clear order. You can still keep the topics and set the order yourself below.</p>}
+              {graphSuggestion.relationships.map(link => {
+                const key = relationshipKey(link.prerequisite, link.topic);
+                return (
+                  <label key={key} className="flex cursor-pointer items-start gap-3 rounded-lg px-2 py-2 hover:bg-[var(--eb-raised)]">
+                    <input type="checkbox" checked={selectedSuggestedLinks.has(key)} onChange={() => toggleSuggestedLink(link.prerequisite, link.topic)} className="mt-1 h-4 w-4 shrink-0 accent-[#E7EDF2]" />
+                    <span className="flex flex-col gap-0.5">
+                      <span className="text-[15px]">Learn <span className="font-semibold">{link.prerequisite}</span> before <span className="font-semibold">{link.topic}</span></span>
+                      <span className="text-sm text-[var(--eb-text-soft)]">{link.reason}</span>
+                      {link.citations.length > 0 && <span className="text-sm text-[var(--eb-text-muted)]">From {link.citations.map(where).join("; ")}</span>}
+                    </span>
+                  </label>
+                );
+              })}
+            </fieldset>
+            <div className="flex flex-wrap gap-2">
+              <button type="button" onClick={() => void applySuggestedGraph()} disabled={applyingGraph || (selectedSuggestedTopics.size === 0 && selectedSuggestedLinks.size === 0)} className={primary}>{applyingGraph ? "Saving…" : "Keep the ticked ones"}</button>
+              <button type="button" onClick={() => setGraphSuggestion(null)} className={quiet}>Discard all</button>
+            </div>
+          </div>
+        )}
+
+        <div className="flex flex-col gap-3">
+          <span className="text-[15px] font-semibold">Topics</span>
+          <form className="flex max-w-[520px] gap-2" onSubmit={event => { event.preventDefault(); void addGraphTopic(); }}>
+            <input value={newTopicName} onChange={event => setNewTopicName(event.target.value)} placeholder="Add a topic" aria-label="New topic" className={`${field} min-w-0 flex-1`} />
+            <button type="submit" disabled={!newTopicName.trim() || addingTopic || !graphCourseId} className={primary}>{addingTopic ? "Adding…" : "Add"}</button>
+          </form>
+          {graphLoading ? <p className={note}>Loading topics…</p> : graphTopics.length > 0 && (
+            <ul className="m-0 flex list-none flex-wrap gap-1.5 p-0">{graphTopics.map(topic => <li key={topic.id} className="rounded-lg border border-[var(--eb-line)] px-3 py-1.5 text-sm text-[var(--eb-text-soft)]">{topic.name}</li>)}</ul>
+          )}
+        </div>
+
+        {!graphLoading && (graphTopics.length < 2 ? <p className={note}>Add at least two topics, then say which comes first.</p> : (
+          <div className="flex flex-col gap-4">
+            <span className="text-[15px] font-semibold">Order</span>
+            <div className="grid gap-4 md:grid-cols-2">
+              <div className="flex flex-col gap-2">
+                <span className="text-sm text-[var(--eb-text-soft)]">Students need this first…</span>
+                <div className="flex flex-wrap gap-1.5">{graphTopics.map(topic => <button key={topic.id} type="button" aria-pressed={prerequisiteId === topic.id} disabled={topic.id === dependentId} onClick={() => setPrerequisiteId(topic.id)} className={`${chip(prerequisiteId === topic.id)} disabled:opacity-30`}>{topic.name}</button>)}</div>
+              </div>
+              <div className="flex flex-col gap-2">
+                <span className="text-sm text-[var(--eb-text-soft)]">…before they can learn this</span>
+                <div className="flex flex-wrap gap-1.5">{graphTopics.map(topic => <button key={topic.id} type="button" aria-pressed={dependentId === topic.id} disabled={topic.id === prerequisiteId} onClick={() => setDependentId(topic.id)} className={`${chip(dependentId === topic.id)} disabled:opacity-30`}>{topic.name}</button>)}</div>
+              </div>
+            </div>
+            <button type="button" onClick={() => void addPrerequisite()} disabled={!prerequisiteId || !dependentId} className={`${primary} self-start`}>Save this order</button>
+            {graphLinks.length > 0 ? (
+              <ul className="m-0 flex list-none flex-col p-0">
+                {graphLinks.map(link => {
+                  const first = graphTopics.find(topic => topic.id === link.prerequisite_topic_id)?.name ?? "A topic";
+                  const then = graphTopics.find(topic => topic.id === link.topic_id)?.name ?? "a topic";
+                  return (
+                    <li key={link.id} className="flex items-center justify-between gap-3 border-b border-[var(--eb-line-soft)] py-2.5 last:border-0">
+                      <span className="text-[15px]"><span className="font-semibold">{first}</span> before <span className="font-semibold">{then}</span></span>
+                      <button type="button" onClick={() => void removePrerequisite(link.id)} className="min-h-9 rounded-lg px-2.5 text-sm text-[var(--eb-text-muted)] hover:text-[var(--eb-text)]">Remove</button>
+                    </li>
+                  );
+                })}
+              </ul>
+            ) : <p className={note}>No order set yet.</p>}
+            {graphLinks.length > 0 && <p className={note}>Practice quizzes now check the earlier topic first, and show students the order.</p>}
+          </div>
+        ))}
       </div>
-    </section>
 
-    <section className="bg-card border border-border rounded-2xl p-6 shadow-sm mb-5 flex justify-between items-center">
-      <div><h2 className="font-semibold">Dark mode</h2><p className="text-xs text-muted-foreground">Saved across sessions.</p></div>
-      <SettingsToggle on={darkMode} onToggle={() => void persistPrefs({ ...prefs, darkMode: !darkMode })} />
-    </section>
+      <div className="flex flex-col gap-4 px-6 py-7 sm:px-8">
+        <div className="flex flex-col gap-1">
+          <h2 className={sectionTitle}>Notify me when</h2>
+          <p className={note}>Notifications appear under the bell at the top of the page. Email isn’t available yet.</p>
+        </div>
+        <ul className="m-0 flex list-none flex-col p-0">
+          {preferenceRows.map(item => (
+            <li key={item.key} className="flex items-center justify-between gap-4 border-b border-[var(--eb-line-soft)] py-3 last:border-0">
+              <span className="flex flex-col gap-0.5"><span id={`pref-${item.key}`} className="text-[15px]">{item.label}</span><span className={note}>{item.desc}</span></span>
+              <SettingsToggle on={Boolean(prefs[item.key])} labelledBy={`pref-${item.key}`} onToggle={() => void persistPrefs({ ...prefs, [item.key]: !prefs[item.key] })} />
+            </li>
+          ))}
+          <li className="flex items-center justify-between gap-4 py-3">
+            <span className="flex flex-col gap-0.5"><span id="pref-dark" className="text-[15px]">Dark background everywhere</span><span className={note}>Also darkens the parts of the app around these panels.</span></span>
+            <SettingsToggle on={darkMode} labelledBy="pref-dark" onToggle={() => void persistPrefs({ ...prefs, darkMode: !darkMode })} />
+          </li>
+        </ul>
+      </div>
 
-    <section className="bg-card border border-border rounded-2xl p-6 shadow-sm">
-      <h2 className="font-semibold mb-4">Account</h2>
-      <button onClick={() => void sendPasswordReset(user?.email).then(() => toast.success("Password reset email sent.")).catch(error => toast.error(error.message))} className="w-full text-left px-4 py-3 rounded-xl text-sm font-medium hover:bg-muted flex justify-between">Send password reset email <ChevronRight size={15} /></button>
-      <button onClick={() => { downloadJson("edubridge-teacher-data.json", { profile: account, email: user?.email, courses, preferences: prefs }); toast.success("Your data was downloaded."); }} className="w-full text-left px-4 py-3 rounded-xl text-sm font-medium hover:bg-muted flex justify-between">Download my data <ChevronRight size={15} /></button>
-    </section>
-  </div>;
+      <div className="flex flex-col gap-3 px-6 py-7 sm:px-8">
+        <h2 className={sectionTitle}>Account</h2>
+        <div className="flex flex-wrap gap-2">
+          <button type="button" onClick={() => void sendPasswordReset(user?.email).then(() => toast.success(`A password reset link is on its way to ${user?.email}`)).catch(error => toast.error(error.message))} className={quiet}>Email me a password reset link</button>
+          <button type="button" onClick={() => { downloadJson("edubridge-teacher-data.json", { profile: account, email: user?.email, courses, preferences: prefs }); toast.success("Your data was downloaded."); }} className={quiet}>Download my data</button>
+        </div>
+      </div>
+    </div>
+  </section>;
 }
 
 // ─── Student Settings ─────────────────────────────────────────────────────
@@ -2601,78 +2289,121 @@ function StudentSettings({ courses, darkMode, setDarkMode }: { courses: StudentC
     toast.success("Profile updated");
   };
 
-  return <div className="p-6 lg:p-8 max-w-2xl mx-auto text-foreground">
-    <div className="mb-8"><h1 className="font-display text-2xl text-foreground">Settings</h1><p className="text-sm text-muted-foreground mt-1">Update your profile and study preferences.</p></div>
+  const sectionTitle = "m-0 text-[19px] font-semibold tracking-[-0.01em]";
+  const note = "m-0 text-sm leading-relaxed text-[var(--eb-text-muted)]";
+  const field = "w-full min-h-11 rounded-xl border border-[var(--eb-line)] bg-[var(--eb-raised-2)] px-4 text-[15px] text-[var(--eb-text)] focus:border-[var(--eb-text-muted)] focus:outline-none";
+  const primary = "min-h-10 rounded-lg bg-[var(--eb-text)] px-4 text-sm font-semibold text-[var(--eb-ink)] disabled:opacity-40";
+  const quiet = "min-h-10 rounded-lg border border-[var(--eb-line)] px-3 text-sm text-[var(--eb-text-soft)] hover:border-[var(--eb-text-muted)] hover:text-[var(--eb-text)] disabled:opacity-40";
+  const DIFFICULTY = [
+    { value: "easy", label: "Easier", note: "Starts gently and builds up" },
+    { value: "adaptive", label: "Match my level", note: "Gets harder as you get answers right" },
+    { value: "hard", label: "Harder", note: "Goes straight to the tricky questions" },
+  ] as const;
 
-    <section className="bg-card border border-border rounded-2xl p-6 shadow-sm mb-5">
-      <div className="flex justify-between mb-5"><h2 className="font-semibold">Profile</h2><button onClick={() => setEditing(value => !value)} className="text-xs flex gap-1.5 items-center text-muted-foreground"><Pencil size={12} />{editing ? "Cancel" : "Edit"}</button></div>
-      <div className="flex gap-4"><div className="w-16 h-16 rounded-2xl bg-accent text-accent-foreground flex items-center justify-center font-display text-xl shrink-0">{initialsFor(account?.display_name)}</div>
-        <div className="flex-1 space-y-3">{editing ? <>
-          <input value={details.name} onChange={event => setDetails(value => ({ ...value, name: event.target.value }))} placeholder="Full name" className="w-full border border-border rounded-xl px-3 py-2 text-sm bg-background text-foreground" />
-          <input value={details.headline} onChange={event => setDetails(value => ({ ...value, headline: event.target.value }))} placeholder="Program or major" className="w-full border border-border rounded-xl px-3 py-2 text-sm bg-background text-foreground" />
-          <input value={details.organization} onChange={event => setDetails(value => ({ ...value, organization: event.target.value }))} placeholder="Study level or institution" className="w-full border border-border rounded-xl px-3 py-2 text-sm bg-background text-foreground" />
-          <button disabled={saving || !details.name.trim()} onClick={() => void saveProfile()} className="w-full bg-primary text-primary-foreground py-2.5 rounded-xl text-sm font-semibold disabled:opacity-50">{saving ? "Saving…" : "Save profile"}</button>
-        </> : <>
-          <div className="font-semibold">{account?.display_name}</div><div className="text-sm text-muted-foreground">{account?.headline || "Student"}{account?.organization ? ` · ${account.organization}` : ""}</div><div className="text-xs text-muted-foreground font-mono">{user?.email}</div><div className="text-[11px] text-muted-foreground">Email changes require a separate verification flow.</div>
-        </>}</div>
+  return <div className="eb-stage min-h-[calc(100vh-3.5rem)] px-5 py-10 sm:px-10">
+    <div className="mx-auto flex max-w-[640px] flex-col gap-10">
+      <div className="flex flex-col gap-2">
+        <h2 className="m-0 text-[28px] font-semibold tracking-[-0.02em]">Settings</h2>
+        <p className="m-0 text-[16px] text-[var(--eb-text-soft)]">Your profile and how quizzes work for you.</p>
       </div>
-    </section>
 
-    <section className="bg-card border border-border rounded-2xl p-6 shadow-sm mb-5">
-      <h2 className="font-semibold mb-1">Quiz Preferences</h2><p className="text-xs text-muted-foreground mb-5">Saved to your account.</p>
-      <div className="grid grid-cols-3 gap-2 mb-5">{(["easy", "adaptive", "hard"] as const).map(difficulty => <button key={difficulty} onClick={() => void persistPrefs({ ...prefs, difficulty })} className={`py-2.5 rounded-xl text-sm capitalize border ${prefs.difficulty === difficulty ? "bg-primary text-primary-foreground border-primary" : "border-border"}`}>{difficulty}</button>)}</div>
-      <div className="flex justify-between"><div><div className="text-sm font-medium">Misconception alerts</div><div className="text-xs text-muted-foreground">When your teacher reviews a detected misunderstanding</div></div><SettingsToggle on={Boolean(prefs.misconceptionAlerts)} onToggle={() => void persistPrefs({ ...prefs, misconceptionAlerts: !prefs.misconceptionAlerts })} /></div>
-      <div className="mt-5 rounded-xl border border-border bg-muted/40 px-4 py-3 text-xs text-muted-foreground">
-        Daily reminders and weekly progress emails will be available after scheduled email delivery is configured.
-      </div>
-    </section>
+      <section className="flex flex-col gap-4">
+        <div className="flex items-center justify-between gap-3">
+          <h3 className={sectionTitle}>Profile</h3>
+          <button type="button" onClick={() => setEditing(value => !value)} className={quiet}>{editing ? "Cancel" : "Edit"}</button>
+        </div>
+        {editing ? (
+          <form className="flex flex-col gap-3" onSubmit={event => { event.preventDefault(); void saveProfile(); }}>
+            <label className="flex flex-col gap-1.5"><span className="text-sm text-[var(--eb-text-soft)]">Full name</span><input value={details.name} onChange={event => setDetails(value => ({ ...value, name: event.target.value }))} className={field} /></label>
+            <label className="flex flex-col gap-1.5"><span className="text-sm text-[var(--eb-text-soft)]">What you study</span><input value={details.headline} onChange={event => setDetails(value => ({ ...value, headline: event.target.value }))} placeholder="For example, Computer Science" className={field} /></label>
+            <label className="flex flex-col gap-1.5"><span className="text-sm text-[var(--eb-text-soft)]">School or year</span><input value={details.organization} onChange={event => setDetails(value => ({ ...value, organization: event.target.value }))} className={field} /></label>
+            <button type="submit" disabled={saving || !details.name.trim()} className={`${primary} self-start`}>{saving ? "Saving…" : "Save profile"}</button>
+          </form>
+        ) : (
+          <div className="flex flex-col gap-0.5">
+            <span className="text-[17px] font-semibold">{account?.display_name}</span>
+            <span className="text-[15px] text-[var(--eb-text-soft)]">{account?.headline || "Student"}{account?.organization ? `, ${account.organization}` : ""}</span>
+            <span className="text-sm text-[var(--eb-text-muted)]">{user?.email}</span>
+            <span className="mt-2 text-sm text-[var(--eb-text-muted)]">
+              {courses.length} {courses.length === 1 ? "course" : "courses"}, {quizCount} {quizCount === 1 ? "quiz" : "quizzes"} taken
+              {account?.created_at ? `, with EduBridge since ${new Date(account.created_at).toLocaleDateString(undefined, { month: "long", year: "numeric" })}` : ""}
+            </span>
+          </div>
+        )}
+      </section>
 
-    <section className="bg-card border border-border rounded-2xl p-6 shadow-sm mb-5">
-      <h2 className="font-semibold mb-4">Your Stats</h2>
-      <div className="grid grid-cols-3 gap-3">{[
-        ["Member since", account?.created_at ? new Date(account.created_at).toLocaleDateString(undefined, { month: "short", year: "numeric" }) : "—"],
-        ["Total quizzes", String(quizCount)],
-        ["Courses enrolled", String(courses.length)],
-      ].map(([label, value]) => <div key={label} className="bg-muted/50 rounded-xl p-3"><div className="text-xs text-muted-foreground">{label}</div><div className="font-semibold text-sm">{value}</div></div>)}</div>
-    </section>
+      <section className="flex flex-col gap-4 border-t border-[var(--eb-line-soft)] pt-8">
+        <div className="flex flex-col gap-1">
+          <h3 className={sectionTitle}>Quiz difficulty</h3>
+          <p className={note}>How hard new quizzes start out.</p>
+        </div>
+        <div role="radiogroup" aria-label="Quiz difficulty" className="grid gap-2 sm:grid-cols-3">
+          {DIFFICULTY.map(option => {
+            const on = prefs.difficulty === option.value;
+            return (
+              <button key={option.value} type="button" role="radio" aria-checked={on} onClick={() => void persistPrefs({ ...prefs, difficulty: option.value })}
+                className={`flex min-h-[72px] flex-col items-start justify-center gap-0.5 rounded-xl px-4 py-3 text-left transition-colors ${on ? "bg-[var(--eb-text)] text-[var(--eb-ink)]" : "border border-[var(--eb-line)] hover:border-[var(--eb-text-muted)]"}`}>
+                <span className="text-[15px] font-semibold">{option.label}</span>
+                <span className={`text-sm ${on ? "text-[var(--eb-ink-muted)]" : "text-[var(--eb-text-muted)]"}`}>{option.note}</span>
+              </button>
+            );
+          })}
+        </div>
+      </section>
 
-    <section className="bg-card border border-border rounded-2xl p-6 shadow-sm mb-5 flex justify-between items-center"><div><h2 className="font-semibold">Dark mode</h2><p className="text-xs text-muted-foreground">Saved across sessions.</p></div><SettingsToggle on={darkMode} onToggle={() => void persistPrefs({ ...prefs, darkMode: !darkMode })} /></section>
+      <section className="flex flex-col gap-2 border-t border-[var(--eb-line-soft)] pt-8">
+        <h3 className={sectionTitle}>Notify me when</h3>
+        <ul className="m-0 flex list-none flex-col p-0">
+          <li className="flex items-center justify-between gap-4 border-b border-[var(--eb-line-soft)] py-3">
+            <span className="flex flex-col gap-0.5"><span id="pref-mistakes" className="text-[15px]">My teacher looks at a mistake I made</span><span className={note}>So you know when something has been confirmed or cleared.</span></span>
+            <SettingsToggle on={Boolean(prefs.misconceptionAlerts)} labelledBy="pref-mistakes" onToggle={() => void persistPrefs({ ...prefs, misconceptionAlerts: !prefs.misconceptionAlerts })} />
+          </li>
+          <li className="flex items-center justify-between gap-4 py-3">
+            <span className="flex flex-col gap-0.5"><span id="pref-dark" className="text-[15px]">Dark background everywhere</span><span className={note}>Also darkens the menu and the parts around each screen.</span></span>
+            <SettingsToggle on={darkMode} labelledBy="pref-dark" onToggle={() => void persistPrefs({ ...prefs, darkMode: !darkMode })} />
+          </li>
+        </ul>
+        <p className={note}>Email reminders aren’t available yet.</p>
+      </section>
 
-    <section className="bg-card border border-border rounded-2xl p-6 shadow-sm">
-      <h2 className="font-semibold mb-4">Account</h2>
-      <button onClick={() => void sendPasswordReset(user?.email).then(() => toast.success("Password reset email sent.")).catch(error => toast.error(error.message))} className="w-full text-left px-4 py-3 rounded-xl text-sm font-medium hover:bg-muted flex justify-between">Send password reset email <ChevronRight size={15} /></button>
-      <button onClick={() => { downloadJson("edubridge-student-data.json", { profile: account, email: user?.email, courses, preferences: prefs, totalQuizzes: quizCount }); toast.success("Your data was downloaded."); }} className="w-full text-left px-4 py-3 rounded-xl text-sm font-medium hover:bg-muted flex justify-between">Download my data <ChevronRight size={15} /></button>
-    </section>
+      <section className="flex flex-col gap-3 border-t border-[var(--eb-line-soft)] pt-8">
+        <h3 className={sectionTitle}>Account</h3>
+        <div className="flex flex-wrap gap-2">
+          <button type="button" onClick={() => void sendPasswordReset(user?.email).then(() => toast.success(`A password reset link is on its way to ${user?.email}`)).catch(error => toast.error(error.message))} className={quiet}>Email me a password reset link</button>
+          <button type="button" onClick={() => { downloadJson("edubridge-student-data.json", { profile: account, email: user?.email, courses, preferences: prefs, totalQuizzes: quizCount }); toast.success("Your data was downloaded."); }} className={quiet}>Download my data</button>
+        </div>
+      </section>
+    </div>
   </div>;
 }
 // ─── App ──────────────────────────────────────────────────────────────────
 
 function AuthLoading() {
   return (
-    <div className="min-h-screen bg-background flex items-center justify-center">
-      <div className="text-center">
-        <RefreshCw size={24} className="mx-auto mb-3 animate-spin text-primary" />
-        <p className="text-sm text-muted-foreground">Restoring your session…</p>
-      </div>
+    <div role="status" className="eb-stage flex min-h-screen flex-col items-center justify-center gap-5">
+      <Wordmark width={170} />
+      <span aria-hidden="true" className="relative block h-[3px] w-40 overflow-hidden rounded-sm bg-[var(--eb-line-soft)]">
+        <span className="eb-seek absolute inset-y-0 w-2/5 bg-[linear-gradient(90deg,transparent,var(--eb-text-muted),transparent)]" />
+      </span>
+      <span className="sr-only">Signing you back in</span>
     </div>
   );
 }
 
 function TeacherApprovalPending({ onLogout }: { onLogout: () => void }) {
   const { profile } = useAuth();
+  const first = (profile?.display_name ?? "").split(" ")[0];
   return (
-    <div className="min-h-screen bg-background flex items-center justify-center p-6">
-      <div className="w-full max-w-md rounded-2xl border border-border bg-card p-8 shadow-sm text-center">
-        <div className="mx-auto mb-5 h-12 w-12 rounded-full bg-amber-100 text-amber-700 flex items-center justify-center">
-          <Clock size={22} />
+    <div className="eb-stage flex min-h-screen items-center justify-center px-6 py-10">
+      <div className="flex w-full max-w-[460px] flex-col gap-6">
+        <Wordmark width={150} />
+        <div className="flex flex-col gap-3">
+          <h1 className="m-0 text-[28px] font-semibold tracking-[-0.02em]">Your account is waiting for approval</h1>
+          <p className="m-0 text-[16px] leading-relaxed text-[var(--eb-text-soft)]">
+            Thanks{first ? `, ${first}` : ""}. Teacher accounts are checked by an administrator before they can create courses or see student information. You’ll be able to sign in and start once it’s approved.
+          </p>
         </div>
-        <h1 className="font-display text-2xl text-primary mb-2">Teacher approval pending</h1>
-        <p className="text-sm text-muted-foreground leading-relaxed mb-6">
-          Thanks, {profile?.display_name ?? "Teacher"}. An administrator must approve your teacher account before you can create courses or access student information.
-        </p>
-        <button onClick={onLogout} className="w-full rounded-lg border border-border px-4 py-2.5 text-sm font-medium hover:bg-muted transition-colors">
-          Sign out
-        </button>
+        <button type="button" onClick={onLogout} className="min-h-11 self-start rounded-xl border border-[var(--eb-line)] px-5 text-[var(--eb-text-soft)] hover:text-[var(--eb-text)]">Sign out</button>
       </div>
     </div>
   );
@@ -2726,73 +2457,50 @@ function AdminDashboard({ onLogout }: { onLogout: () => void }) {
       return;
     }
     setTeachers(current => current.filter(item => item.id !== teacher.id));
-    toast.success(`${teacher.display_name} is now an approved teacher.`);
+    toast.success(`${teacher.display_name} can now create courses.`);
   };
 
   return (
-    <div className="min-h-screen bg-background">
-      <header className="border-b border-border bg-card">
-        <div className="mx-auto max-w-5xl px-6 py-4 flex items-center justify-between gap-4">
-          <div>
-            <div className="font-display text-xl text-primary">EduBridge AI</div>
-            <div className="text-xs text-muted-foreground">Administrator portal</div>
-          </div>
-          <div className="flex items-center gap-3">
-            <div className="hidden sm:block text-right">
-              <div className="text-sm font-medium text-foreground">{profile?.display_name ?? "Administrator"}</div>
-              <div className="text-xs text-muted-foreground">Administrator</div>
-            </div>
-            <button onClick={onLogout} className="rounded-lg border border-border px-3 py-2 text-sm font-medium hover:bg-muted transition-colors flex items-center gap-2">
-              <LogOut size={15} /> Sign out
-            </button>
-          </div>
+    <div className="eb-stage min-h-screen">
+      <header className="border-b border-[var(--eb-line-soft)]">
+        <div className="mx-auto flex max-w-4xl items-center justify-between gap-4 px-6 py-4">
+          <span className="flex items-center gap-3"><Wordmark width={130} /><span className="text-sm text-[var(--eb-text-muted)]">Administrator</span></span>
+          <span className="flex items-center gap-3">
+            <span className="hidden text-sm text-[var(--eb-text-soft)] sm:inline">{profile?.display_name ?? "Administrator"}</span>
+            <button type="button" onClick={onLogout} className="min-h-10 rounded-lg border border-[var(--eb-line)] px-3 text-sm text-[var(--eb-text-soft)] hover:text-[var(--eb-text)]">Sign out</button>
+          </span>
         </div>
       </header>
-
-      <main className="mx-auto max-w-5xl px-6 py-8">
-        <div className="mb-7">
-          <h1 className="font-display text-3xl text-foreground mb-2">Teacher approvals</h1>
-          <p className="text-sm text-muted-foreground">Review teacher applications before granting access to course creation and student information.</p>
-        </div>
-
-        <section className="rounded-2xl border border-border bg-card shadow-sm overflow-hidden">
-          <div className="border-b border-border px-5 py-4 flex items-center justify-between">
-            <div>
-              <h2 className="font-semibold text-foreground">Pending applications</h2>
-              <p className="text-xs text-muted-foreground mt-0.5">{teachers.length} awaiting review</p>
-            </div>
-            <button onClick={() => void loadPendingTeachers()} disabled={loadingTeachers} className="rounded-lg border border-border p-2 hover:bg-muted disabled:opacity-50" aria-label="Refresh pending teachers">
-              <RefreshCw size={16} className={loadingTeachers ? "animate-spin" : ""} />
-            </button>
+      <main className="mx-auto flex max-w-4xl flex-col gap-6 px-6 py-10">
+        <div className="flex flex-wrap items-end justify-between gap-4">
+          <div className="flex flex-col gap-1.5">
+            <h1 className="m-0 text-[28px] font-semibold tracking-[-0.02em]">Teachers waiting for approval</h1>
+            <p className="m-0 text-[15px] text-[var(--eb-text-soft)]">Approved teachers can create courses and see their students’ information.</p>
           </div>
-
-          {loadingTeachers ? (
-            <div className="py-14 text-center text-sm text-muted-foreground"><RefreshCw size={20} className="mx-auto mb-3 animate-spin" />Loading applications…</div>
-          ) : teachers.length === 0 ? (
-            <div className="py-14 text-center px-6">
-              <CheckCircle size={28} className="mx-auto mb-3 text-emerald-600" />
-              <h3 className="font-semibold text-foreground mb-1">All caught up</h3>
-              <p className="text-sm text-muted-foreground">There are no teacher applications waiting for approval.</p>
-            </div>
-          ) : (
-            <div className="divide-y divide-border">
-              {teachers.map(teacher => (
-                <div key={teacher.id} className="px-5 py-4 flex flex-col sm:flex-row sm:items-center justify-between gap-4">
-                  <div className="flex items-center gap-3">
-                    <div className="h-10 w-10 rounded-full bg-primary/10 text-primary flex items-center justify-center text-sm font-semibold">{initialsFor(teacher.display_name)}</div>
-                    <div>
-                      <div className="font-medium text-foreground">{teacher.display_name || "Unnamed teacher"}</div>
-                      <div className="text-xs text-muted-foreground">Applied {new Date(teacher.created_at).toLocaleDateString()}</div>
-                    </div>
-                  </div>
-                  <button onClick={() => void approveTeacher(teacher)} disabled={approvingId === teacher.id} className="rounded-lg bg-primary text-primary-foreground px-4 py-2 text-sm font-medium hover:opacity-90 disabled:opacity-50 flex items-center justify-center gap-2">
-                    {approvingId === teacher.id ? <RefreshCw size={15} className="animate-spin" /> : <CheckCircle size={15} />} Approve teacher
-                  </button>
-                </div>
-              ))}
-            </div>
-          )}
-        </section>
+          <button type="button" onClick={() => void loadPendingTeachers()} disabled={loadingTeachers} className="min-h-10 rounded-lg border border-[var(--eb-line)] px-3 text-sm text-[var(--eb-text-soft)] hover:text-[var(--eb-text)] disabled:opacity-40">
+            {loadingTeachers ? "Checking…" : "Check again"}
+          </button>
+        </div>
+        {loadingTeachers ? (
+          <p role="status" className="m-0 text-[15px] text-[var(--eb-text-soft)]">Loading applications…</p>
+        ) : teachers.length === 0 ? (
+          <p className="m-0 text-[15px] text-[var(--eb-text-muted)]">No one is waiting. New teacher sign-ups will appear here.</p>
+        ) : (
+          <ul className="m-0 flex list-none flex-col p-0">
+            {teachers.map(teacher => (
+              <li key={teacher.id} className="flex flex-wrap items-center justify-between gap-4 border-b border-[var(--eb-line-soft)] py-4 last:border-0">
+                <span className="flex flex-col gap-0.5">
+                  <span className="text-[16px] font-semibold">{teacher.display_name || "No name given"}</span>
+                  <span className="text-sm text-[var(--eb-text-muted)]">Signed up {new Date(teacher.created_at).toLocaleDateString(undefined, { day: "numeric", month: "long", year: "numeric" })}</span>
+                </span>
+                <button type="button" onClick={() => void approveTeacher(teacher)} disabled={approvingId === teacher.id}
+                  className="min-h-10 rounded-lg bg-[var(--eb-text)] px-4 text-sm font-semibold text-[var(--eb-ink)] disabled:opacity-50">
+                  {approvingId === teacher.id ? "Approving…" : "Approve"}
+                </button>
+              </li>
+            ))}
+          </ul>
+        )}
       </main>
     </div>
   );
@@ -2853,7 +2561,7 @@ export default function App() {
     <div className={darkMode ? "dark" : ""}>
       <Toaster position="bottom-right" toastOptions={{ style: { fontFamily: "Outfit, sans-serif", fontSize: "14px" } }} />
       {view === "landing" && <Suspense fallback={<div className="eb-stage min-h-screen" />}><Landing onNavigate={go} /></Suspense>}
-      {view === "auth" && <Auth role={role} setRole={setRole} onBack={() => setView("landing")} />}
+      {view === "auth" && <Suspense fallback={<div className="eb-stage min-h-screen" />}><AuthScreen role={role} setRole={setRole} onBack={() => setView("landing")} /></Suspense>}
       {view === "admin" && session && profile?.role === "admin" && <AdminDashboard onLogout={() => void logout()} />}
       {view === "teacher" && session && profile?.role === "teacher" && <TeacherDashboard key={session.user.id} onLogout={() => void logout()} darkMode={darkMode} setDarkMode={setDarkMode} />}
       {view === "student" && session && profile?.role === "student" && <StudentDashboard key={session.user.id} onLogout={() => void logout()} darkMode={darkMode} setDarkMode={setDarkMode} />}

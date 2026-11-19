@@ -1,3 +1,5 @@
+import { Wordmark } from "./components/Logo";
+
 type Role = "teacher" | "student";
 
 const MOTES = [
@@ -46,10 +48,10 @@ export default function Landing({ onNavigate }: { onNavigate: (view: "auth", rol
   const quiet = "inline-flex min-h-12 items-center justify-center rounded-xl border border-[var(--eb-line)] px-6 text-[var(--eb-text)] transition-colors hover:border-[var(--eb-text-muted)]";
 
   return (
-    <div className="eb-stage min-h-screen">
+    <div id="top" className="eb-stage min-h-screen">
       <nav className="sticky top-0 z-40 border-b border-[var(--eb-line-soft)] bg-[rgba(30,42,54,0.92)] backdrop-blur-md">
         <div className="mx-auto flex h-16 max-w-6xl items-center justify-between px-6">
-          <span className="eb-serif text-[21px] font-medium">EduBridge</span>
+          <a href="#top" aria-label="EduBridge, back to top"><Wordmark width={144} /></a>
           <div className="flex items-center gap-2">
             <a href="#how" className="hidden min-h-10 items-center rounded-lg px-3 text-[15px] text-[var(--eb-text-soft)] hover:text-[var(--eb-text)] sm:inline-flex">How it works</a>
             <button type="button" onClick={() => onNavigate("auth")} className="min-h-10 rounded-lg px-3 text-[15px] text-[var(--eb-text-soft)] hover:text-[var(--eb-text)]">Sign in</button>
@@ -164,7 +166,7 @@ export default function Landing({ onNavigate }: { onNavigate: (view: "auth", rol
 
       <footer className="border-t border-[var(--eb-line-soft)]">
         <div className="mx-auto flex max-w-6xl flex-wrap items-center justify-between gap-3 px-6 py-8 text-sm text-[var(--eb-text-muted)]">
-          <span className="eb-serif text-[16px] text-[var(--eb-text)]">EduBridge</span>
+          <Wordmark width={140} />
           <span>© {new Date().getFullYear()} EduBridge AI</span>
         </div>
       </footer>
