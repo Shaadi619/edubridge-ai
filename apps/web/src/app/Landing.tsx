@@ -25,6 +25,7 @@ const TEACHER_SIDE = [
 type Photo = { id: string; alt: string; credit: string; profile: string; page: string; position: string; tone: string };
 
 // Free-licence Unsplash photos, loaded from Unsplash's own image server as their licence allows.
+// The licence doesn't require credit on the page; photographers are kept here for the record.
 const PHOTOS: Record<"student" | "teacher", Photo> = {
   student: {
     id: "photo-1639300505533-9921527d6a50",
@@ -46,6 +47,8 @@ const PHOTOS: Record<"student" | "teacher", Photo> = {
   },
 };
 
+const HERO_PHOTO = "https://images.unsplash.com/photo-1541829070764-84a7d30dd3f3?auto=format&fit=crop&q=60";
+
 const photoUrl = (id: string, width: number) =>
   `https://images.unsplash.com/${id}?auto=format&fit=crop&w=${width}&h=${Math.round(width / 1.5)}&q=70`;
 
@@ -66,10 +69,6 @@ function ColumnPhoto({ photo }: { photo: Photo }) {
           style={{ objectPosition: photo.position, filter: photo.tone }}
         />
       </div>
-      <figcaption className="text-[13px] text-[var(--eb-text-muted)]">
-        Photo by <a href={photo.profile} target="_blank" rel="noreferrer" className="underline decoration-[var(--eb-line)] underline-offset-2 hover:text-[var(--eb-text)]">{photo.credit}</a> on{" "}
-        <a href={photo.page} target="_blank" rel="noreferrer" className="underline decoration-[var(--eb-line)] underline-offset-2 hover:text-[var(--eb-text)]">Unsplash</a>
-      </figcaption>
     </figure>
   );
 }
@@ -123,7 +122,11 @@ export default function Landing({ onNavigate }: { onNavigate: (view: "auth", rol
         </div>
       </nav>
 
-      <header className="mx-auto grid max-w-6xl items-center gap-12 px-6 pb-20 pt-14 lg:grid-cols-[minmax(0,1fr)_minmax(0,1.05fr)] lg:pt-20">
+      <div className="relative overflow-hidden">
+      {/* A lecture hall behind the opening, faded to a watermark. Photo: Changbok Ko, Unsplash. */}
+      <div aria-hidden="true" className="eb-hero-photo"
+        style={{ backgroundImage: `image-set(url("${HERO_PHOTO}&w=1600") 1x, url("${HERO_PHOTO}&w=2400") 2x)` }} />
+      <header className="relative mx-auto grid max-w-6xl items-center gap-12 px-6 pb-20 pt-14 lg:grid-cols-[minmax(0,1fr)_minmax(0,1.05fr)] lg:pt-20">
         <div className="flex flex-col gap-6">
           <h1 className="m-0 text-[clamp(38px,5.4vw,60px)] font-semibold leading-[1.04] tracking-[-0.03em]">
             Every answer comes with the page it came from.
@@ -164,6 +167,7 @@ export default function Landing({ onNavigate }: { onNavigate: (view: "auth", rol
           <figcaption className="text-sm text-[var(--eb-text-muted)]">An example. The highlighted line is the one the answer was checked against.</figcaption>
         </figure>
       </header>
+      </div>
 
       <section aria-labelledby="what" className="border-t border-[var(--eb-line-soft)] bg-[var(--eb-stage-deep)]">
         <div className="mx-auto flex max-w-6xl flex-col gap-10 px-6 py-20">
