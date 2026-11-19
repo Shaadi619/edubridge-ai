@@ -1,17 +1,17 @@
-# Final checks
+# Final checks for the redesign
 
-Things to verify by hand before the redesign branch is merged. Tick each one off once it has been seen working.
+Hand checks run before the projection-room redesign was merged ([#1](https://github.com/Shaadi619/edubridge-ai/pull/1), 19 November 2026). Kept for the record; unticked items are still worth checking before going online.
 
 ## Show Your Work
 
-- [ ] Upload a photo of working with a deliberate mistake (uses AI tokens) and check the feedback screen:
+- [x] (19 Nov) Upload a photo of working with a deliberate mistake (uses AI tokens) and check the feedback screen:
   - steps appear as a numbered sequence, the student's own working in teal and corrections in coral
   - each correction's source button lights the quoted line on the cited page
   - a correction with no matching course quote shows the "couldn't be matched" note
   - a confident misconception backed by course text appears in the teacher's review queue; one without verified text does not
 - [ ] Check the same screen at desktop width (source panel beside the feedback) and phone width (panel below, hidden until there's a cited page).
-- [ ] Turn the course switch off in teacher Settings and confirm the student tab disappears and the API refuses uploads.
-- [ ] Decide whether Show Your Work should stay on for Advanced AI (it was switched on during testing on 19 November).
+- [ ] Turn the course switch off in teacher Settings and confirm the student tab disappears and the API refuses uploads. (19 Nov: the tab is hidden while the switch is off, and the switch survives a reload; the API refusal is not yet seen.)
+- [ ] Decide whether Show Your Work should stay on for Advanced AI (it was switched on during testing).
 
 ## Database
 
@@ -21,14 +21,14 @@ Things to verify by hand before the redesign branch is merged. Tick each one off
 
 - [x] (19 Nov, teacher side; student still to confirm the message arrives) "Draft a message with AI" opens the follow-up dialog (uses AI tokens): the draft loads, fields are editable, Escape and Close work, "Send to …" assigns it and the student sees the message.
 - [ ] A student entering the join code appears under "waiting to join"; "Let in" and "Turn down" both work.
-- [ ] A Show Your Work upload with a confident, course-backed misconception appears under "uploads to check"; "Agree, add to their record" and "Not a problem" both work.
-- [ ] Post an announcement (with and without "Keep it at the top") and delete it; students see it.
+- [x] (19 Nov; "Not a problem" not tried) A Show Your Work upload with a confident, course-backed misconception appears under "uploads to check"; "Agree, add to their record" and "Not a problem" both work.
+- [x] (19 Nov, pinned only) Post an announcement (with and without "Keep it at the top") and delete it; students see it.
 - [x] (19 Nov) "Copy" copies the join code.
 
 ## Sign-in, settings and brand
 
-- [ ] Student: Join Course finds a course by code, "Ask to join" sends a request, "Cancel request" works, and a code that doesn't exist shows the "No course has that code" message.
-- [ ] Student Settings: edit and save the profile, change quiz difficulty, flip both switches, and check each change survives a reload.
+- [ ] Student: Join Course finds a course by code, "Ask to join" sends a request, "Cancel request" works, and a code that doesn't exist shows the "No course has that code" message. (19 Nov: a wrong code and an already-joined course both behave; asking and cancelling not tried.)
+- [x] (19 Nov) Student Settings: edit and save the profile, change quiz difficulty, flip both switches, and check each change survives a reload.
 - [x] (19 Nov; "Keep the ticked ones" and adding a topic not tried, to leave your topics unchanged) Teacher Settings: "Suggest topics" (uses AI tokens) shows topics and an order with ticks; "Keep the ticked ones" saves them; adding a topic, saving an order and removing it all work.
 - [ ] Sign up a new teacher and a new student end to end (sign-up, email confirmation if enabled, the "waiting for approval" screen, admin approval).
 - [x] (19 Nov, page source; phone icon not seen on a phone) The favicon and phone home-screen icon show the uB monogram.
@@ -66,7 +66,7 @@ Things to verify by hand before the redesign branch is merged. Tick each one off
 - Fixed: Analytics and the course summary didn't count an agreed upload until the page was reloaded.
 - Fixed: the upload quote showed doubled quotation marks.
 - Fixed: mistake titles like "sequential processing misconception" now read "Sequential processing".
-- Fixed: an agreed upload now counts as another time an existing mistake on the same idea showed up, instead of listing it twice. (The duplicate made during the checks is still there; mark one as dealt with.)
+- Fixed: an agreed upload now counts as another time an existing mistake on the same idea showed up, instead of listing it twice. (A duplicate made during the checks predates the fix.)
 - Fixed: the overview said "Everyone is on track today" above a student who had practice assigned. It now says how many students are working on practice you set.
 - Fixed: on a long page the lit line could sit below the visible part of the page; it now scrolls into view.
 - Slow: My Progress takes about 5 seconds to load for the test student.
