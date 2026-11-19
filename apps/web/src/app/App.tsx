@@ -32,6 +32,7 @@ const TodayStage = lazy(() => import("./teacher/TodayStage"));
 const QuizStage = lazy(() => import("./student/QuizStage"));
 const ProgressStage = lazy(() => import("./student/ProgressStage"));
 const CheckDialog = lazy(() => import("./student/CheckDialog"));
+const WorkStage = lazy(() => import("./student/WorkStage"));
 
 // ─── Types ────────────────────────────────────────────────────────────────
 
@@ -3555,7 +3556,7 @@ function StudentDashboard({ onLogout, darkMode, setDarkMode }: { onLogout: () =>
         items={navItems} activeTab={tab} setTab={setTab} onLogout={onLogout} open={sidebarOpen} setOpen={setSidebarOpen}
         extra={courseExtra} />
       <div className="flex-1 min-w-0 lg:ml-64 flex flex-col min-h-screen">
-        <header className={`sticky top-0 z-20 backdrop-blur-sm border-b h-14 flex items-center px-6 gap-4 ${tab === "workspace" || tab === "quiz" || tab === "progress" ? "eb-stage-header" : "bg-background/95 border-border"}`}>
+        <header className={`sticky top-0 z-20 backdrop-blur-sm border-b h-14 flex items-center px-6 gap-4 ${tab === "workspace" || tab === "quiz" || tab === "progress" || tab === "work" ? "eb-stage-header" : "bg-background/95 border-border"}`}>
           <button className="lg:hidden" aria-label="Open menu" onClick={() => setSidebarOpen(true)}><Menu size={20} /></button>
           <h1 className="font-semibold text-foreground text-sm">
             {tab === "workspace" && `Course Q&A${selectedCourse ? ` — ${selectedCourse.name}` : ""}`}
@@ -3594,7 +3595,7 @@ function StudentDashboard({ onLogout, darkMode, setDarkMode }: { onLogout: () =>
               transition={{ duration: 0.18, ease: "easeOut" }} className="h-full"
             >
               {tab === "workspace" && selectedCourse && <Suspense fallback={<div role="status" className="eb-stage h-[calc(100vh-3.5rem)] p-10 text-sm text-[#A9B6C2]">Opening Q&amp;A…</div>}><AskWorkspace messages={messages} isTyping={isTyping} tutorStatus={tutorStatus} historyStatus={historyStatus} onRetryHistory={() => void restoreHistory()} input={input} setInput={setInput} onSend={() => void handleSend()} onExplain={(index, format) => void handleAlternativeExplanation(index, format)} announcements={courseAnnouncements ?? []} course={selectedCourse} /></Suspense>}
-              {tab === "work" && selectedCourse?.showWork && session && <StudentShowWork courseId={selectedCourse.id} courseName={selectedCourse.name} accessToken={session.access_token} />}
+              {tab === "work" && selectedCourse?.showWork && session && <Suspense fallback={<div role="status" className="eb-stage min-h-[calc(100vh-3.5rem)] p-10 text-sm text-[#A9B6C2]">Opening Show Your Work…</div>}><WorkStage key={selectedCourse.id} courseId={selectedCourse.id} courseName={selectedCourse.name} accessToken={session.access_token} /></Suspense>}
               {tab === "work" && !selectedCourse && <div className="p-8 text-sm text-muted-foreground">Join an approved course before submitting work.</div>}
               {tab === "quiz" && !selectedCourse && <div role="status" className="p-8 text-sm text-muted-foreground">{courseStatus ?? "Join an approved course before generating a quiz."}</div>}
               {tab === "progress" && selectedCourse && session && <Suspense fallback={<div role="status" className="eb-stage min-h-[calc(100vh-3.5rem)] p-10 text-sm text-[#A9B6C2]">Opening your progress…</div>}>
@@ -3625,95 +3626,6 @@ function StudentDashboard({ onLogout, darkMode, setDarkMode }: { onLogout: () =>
       />
     </div>
   );
-}
-
-function StudentShowWork({ courseId, courseName, accessToken }: { courseId: string; courseName: string; accessToken: string }) {
-  const fileInputRef = useRef<HTMLInputElement>(null);
-  const [file, setFile] = useState<File | null>(null);
-  const [fileMimeType, setFileMimeType] = useState("");
-  const [context, setContext] = useState("");
-  const [submissions, setSubmissions] = useState<WorkSubmission[]>([]);
-  const [loadingHistory, setLoadingHistory] = useState(true);
-  const [analyzing, setAnalyzing] = useState(false);
-
-  useEffect(() => {
-    setLoadingHistory(true);
-    setFile(null); setFileMimeType(""); setContext("");
-    void api.workSubmissions(courseId, accessToken)
-      .then(setSubmissions)
-      .catch(error => toast.error(error instanceof Error ? error.message : "Could not load submitted work."))
-      .finally(() => setLoadingHistory(false));
-  }, [accessToken, courseId]);
-
-  const chooseFile = (selected?: File) => {
-    if (!selected) return;
-    const extension = selected.name.toLowerCase().split(".").pop();
-    const inferredType = selected.type || ({ jpg: "image/jpeg", jpeg: "image/jpeg", png: "image/png", webp: "image/webp", pdf: "application/pdf" } as Record<string, string>)[extension ?? ""];
-    if (!inferredType || !["image/jpeg", "image/png", "image/webp", "application/pdf"].includes(inferredType)) { toast.error("Choose a JPG, PNG, WebP, or PDF file."); return; }
-    if (selected.size > 8 * 1024 * 1024) { toast.error("The file must be 8 MB or smaller."); return; }
-    setFile(selected);
-    setFileMimeType(inferredType);
-  };
-
-  const submitWork = async () => {
-    if (!file || context.trim().length < 3 || analyzing) return;
-    setAnalyzing(true);
-    try {
-      const dataUrl = await new Promise<string>((resolve, reject) => {
-        const reader = new FileReader();
-        reader.onload = () => resolve(String(reader.result));
-        reader.onerror = () => reject(new Error("The selected file could not be read."));
-        reader.readAsDataURL(file);
-      });
-      const result = await api.analyzeWork(courseId, {
-        filename: file.name, mime_type: fileMimeType, data_base64: dataUrl.split(",")[1] ?? "", context: context.trim(),
-      }, accessToken);
-      setSubmissions(current => [result, ...current.filter(item => item.id !== result.id)]);
-      setFile(null); setFileMimeType(""); setContext("");
-      if (fileInputRef.current) fileInputRef.current.value = "";
-      toast.success("Your work has been analyzed against the course material");
-    } catch (error) {
-      toast.error(error instanceof Error ? error.message : "The submitted work could not be analyzed.");
-    } finally {
-      setAnalyzing(false);
-    }
-  };
-
-  const citationLabel = (citation: { document_title: string; page_number: number | null; source_kind: string }) =>
-    `${citation.document_title}${citation.page_number ? ` · ${citation.source_kind === "slide" ? "Slide" : "Page"} ${citation.page_number}` : ""}`;
-
-  return <div className="p-6 lg:p-8 max-w-3xl mx-auto">
-    <div className="mb-6"><h1 className="font-display text-2xl text-foreground">Show Your Work</h1><p className="text-sm text-muted-foreground mt-1">Upload your reasoning for {courseName}. EduBridge will identify where your steps are strong and where they need revision.</p></div>
-    <div className="bg-card border border-border rounded-2xl p-6 shadow-sm mb-6">
-      <div className="grid md:grid-cols-[220px_1fr] gap-5">
-        <button onClick={() => fileInputRef.current?.click()} className={`min-h-40 rounded-xl border-2 border-dashed flex flex-col items-center justify-center gap-2 p-4 text-center transition-colors ${file ? "border-primary bg-primary/5" : "border-border hover:border-primary/40"}`}>
-          {file ? <><FileText size={24} className="text-primary" /><span className="text-sm font-semibold text-foreground break-all">{file.name}</span><span className="text-[10px] text-muted-foreground">{(file.size / 1024 / 1024).toFixed(1)} MB · Click to replace</span></> : <><Upload size={24} className="text-primary" /><span className="text-sm font-semibold text-foreground">Choose your work</span><span className="text-[10px] text-muted-foreground">JPG, PNG, WebP, or text PDF · 8 MB maximum</span></>}
-        </button>
-        <input ref={fileInputRef} type="file" accept="image/jpeg,image/png,image/webp,application/pdf" className="hidden" onChange={event => chooseFile(event.target.files?.[0])} />
-        <div>
-          <label className="text-xs font-semibold text-foreground">What problem or concept are you working on?</label>
-          <textarea value={context} onChange={event => setContext(event.target.value)} maxLength={2000} rows={5} placeholder="For example: I am explaining how self-attention uses queries, keys, and values. Please check the reasoning in my diagram." className="w-full mt-2 rounded-xl border border-border bg-background text-foreground px-3 py-3 text-sm resize-none focus:outline-none focus:ring-2 focus:ring-ring" />
-          <p className="text-[10px] text-muted-foreground mt-1">This context helps retrieve the correct pages from your course. It does not need to contain the answer.</p>
-          <button onClick={() => void submitWork()} disabled={!file || context.trim().length < 3 || analyzing} className="w-full mt-3 rounded-xl bg-primary text-primary-foreground py-3 text-sm font-semibold disabled:opacity-40 inline-flex items-center justify-center gap-2">{analyzing ? <><RefreshCw size={14} className="animate-spin" />Reading your reasoning and course evidence…</> : <><Sparkles size={14} />Analyze my work</>}</button>
-          <p className="text-[10px] text-muted-foreground text-center mt-2">This action uses AI tokens. Suspected misconceptions require teacher review before affecting mastery.</p>
-        </div>
-      </div>
-    </div>
-    <div className="flex items-center justify-between mb-3"><h2 className="font-semibold text-foreground">Recent submissions</h2><span className="text-xs text-muted-foreground">{submissions.length} shown</span></div>
-    {loadingHistory ? <div className="rounded-xl border border-border bg-card p-6 text-sm text-muted-foreground flex items-center gap-2"><RefreshCw size={14} className="animate-spin" />Loading your work…</div> : <div className="space-y-4">
-      {submissions.map(submission => <div key={submission.id} className="rounded-2xl border border-border bg-card p-5 shadow-sm">
-        <div className="flex items-start justify-between gap-4"><div><div className="text-sm font-semibold text-foreground">{submission.filename}</div><div className="text-xs text-muted-foreground mt-0.5">{submission.context}</div></div><span className={`text-[10px] font-semibold rounded-full px-2 py-1 ${submission.status === "analyzed" ? "bg-emerald-50 text-emerald-700" : submission.status === "failed" ? "bg-red-50 text-red-700" : "bg-amber-50 text-amber-700"}`}>{submission.status}</span></div>
-        {submission.processing_error && <div className="mt-3 rounded-lg bg-red-50 border border-red-200 px-3 py-2 text-xs text-red-800">{submission.processing_error}</div>}
-        {submission.analysis && <div className="mt-4">
-          <div className="rounded-xl bg-muted/40 p-4"><div className="text-xs font-semibold text-foreground mb-1">Overall feedback</div><p className="text-sm text-muted-foreground leading-relaxed">{submission.analysis.summary}</p>{submission.analysis.strengths.length > 0 && <div className="mt-2 text-xs text-emerald-700"><span className="font-semibold">Strengths:</span> {submission.analysis.strengths.join(" · ")}</div>}</div>
-          <div className="space-y-2 mt-3">{submission.analysis.steps.map(step => <div key={step.step_number} className={`rounded-xl border p-3 ${step.status === "correct" ? "border-emerald-200 bg-emerald-50" : step.status === "needs_revision" ? "border-amber-200 bg-amber-50" : "border-border bg-muted/30"}`}><div className="flex items-center gap-2"><span className="text-xs font-semibold text-foreground">Step {step.step_number}</span><span className="text-[10px] uppercase text-muted-foreground">{step.status.replace("_", " ")}</span></div><p className="text-xs text-foreground mt-1">{step.observed_reasoning}</p><p className="text-xs text-muted-foreground mt-1">{step.feedback}</p>{step.citations.length > 0 && <div className="text-[10px] text-primary mt-2">Review: {step.citations.map(citationLabel).join(" · ")}</div>}</div>)}</div>
-          {submission.analysis.misconception.detected && <div className="mt-3 rounded-xl border border-violet-200 bg-violet-50 p-3 text-xs text-violet-900"><div className="font-semibold">Possible misconception: {submission.analysis.misconception.concept || submission.analysis.misconception.label}</div><p className="mt-1">{submission.analysis.misconception.explanation}</p><p className="mt-1 text-violet-700">{submission.review_status === "pending" ? "Waiting for teacher review before this affects your mastery record." : submission.review_status === "approved" ? "Your teacher confirmed this learning gap." : submission.review_status === "dismissed" ? "Your teacher dismissed this suggestion." : "This is guidance only."}</p></div>}
-          <div className="mt-3 text-xs text-foreground"><span className="font-semibold">Next step:</span> {submission.analysis.next_step}</div>
-        </div>}
-      </div>)}
-      {submissions.length === 0 && <div className="rounded-xl border border-border bg-card p-8 text-center text-sm text-muted-foreground">No submitted work yet.</div>}
-    </div>}
-  </div>;
 }
 
 // ─── Document Viewer Modal ────────────────────────────────────────────────

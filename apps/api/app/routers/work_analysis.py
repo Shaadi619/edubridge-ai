@@ -13,7 +13,8 @@ from pydantic import BaseModel, Field
 from pypdf import PdfReader
 
 from app.ai.azure_provider import AzureOpenAIProvider
-from app.ai.contracts import AITier, Citation, EvidenceChunk, ShowWorkAnalysis
+from app.ai.contracts import AITier, EvidenceChunk, EvidenceQuote, ShowWorkAnalysis
+from app.ai.evidence import normalize_whitespace
 from app.ai.embeddings import embedding_client
 from app.ai.prompts import SHOW_WORK_SYSTEM_PROMPT
 from app.auth import AuthenticatedUser, current_user
@@ -82,14 +83,17 @@ def _provider(settings: Settings) -> AzureOpenAIProvider:
 
 
 def _friendly_analysis(analysis: ShowWorkAnalysis, evidence: list[EvidenceChunk]) -> dict:
+    """Keep only citations whose quote really appears in the cited course text."""
     canonical = {item.chunk_id: item for item in evidence}
+    content = {item.chunk_id: normalize_whitespace(item.content) for item in evidence}
 
-    def citations(items: list[Citation]) -> list[dict]:
+    def citations(items: list[EvidenceQuote]) -> list[dict]:
         output: list[dict] = []
         seen: set[tuple[str, int | None]] = set()
-        for citation in items:
-            source = canonical.get(citation.chunk_id)
-            if not source:
+        for reference in items:
+            source = canonical.get(reference.chunk_id)
+            quote = normalize_whitespace(reference.quote)
+            if not source or not quote or quote not in content[source.chunk_id]:
                 continue
             location = (source.document_title, source.page_number)
             if location in seen:
@@ -98,22 +102,36 @@ def _friendly_analysis(analysis: ShowWorkAnalysis, evidence: list[EvidenceChunk]
             output.append({
                 "document_title": source.document_title, "page_number": source.page_number,
                 "source_kind": _source_kind(source.document_title, source.page_number),
+                "chunk_id": source.chunk_id, "quote": quote,
             })
             if len(output) == 3:
                 break
         return output
 
-    steps = [{
-        "step_number": step.step_number, "observed_reasoning": step.observed_reasoning,
-        "status": step.status, "feedback": step.feedback, "citations": citations(step.citations),
-    } for step in analysis.steps[:12]]
-    grounded = analysis.grounded and bool(citations(analysis.citations) or any(step["citations"] for step in steps))
+    steps = []
+    for step in analysis.steps[:12]:
+        backed = citations(step.sources)
+        steps.append({
+            "step_number": step.step_number, "observed_reasoning": step.observed_reasoning,
+            "status": step.status, "feedback": step.feedback, "citations": backed,
+            # A correction with no verified course quote is shown, but marked as unbacked.
+            "grounded": bool(backed) or step.status != "needs_revision",
+        })
+    overall = citations(analysis.sources)
+    grounded = analysis.grounded and bool(overall or any(step["citations"] for step in steps))
     return {
         "observed_work": analysis.observed_work, "summary": analysis.summary,
         "strengths": analysis.strengths[:5], "steps": steps,
-        "citations": citations(analysis.citations), "misconception": analysis.misconception.model_dump(),
+        "citations": overall, "misconception": analysis.misconception.model_dump(),
         "grounded": grounded, "next_step": analysis.next_step,
     }
+
+
+def _review_status(friendly: dict) -> str:
+    """Only a confident misconception backed by verified course text goes to the teacher."""
+    misconception = friendly["misconception"]
+    confident = misconception.get("detected") and float(misconception.get("confidence") or 0) >= 0.8
+    return "pending" if confident and friendly["grounded"] else "not_required"
 
 
 async def _teacher_course(client: httpx.AsyncClient, base: str, headers: dict, course_id: str, user_id: str) -> None:
@@ -219,7 +237,7 @@ async def analyze_work(
                     user_prompt=prompt, output_type=ShowWorkAnalysis,
                 )
             friendly = _friendly_analysis(analysis, evidence)
-            review_status = "pending" if friendly["misconception"].get("detected") and float(friendly["misconception"].get("confidence") or 0) >= 0.8 else "not_required"
+            review_status = _review_status(friendly)
             updated = await client.patch(
                 f"{base}/rest/v1/work_submissions?id=eq.{submission['id']}", headers=headers,
                 json={"status": "analyzed", "analysis": friendly, "review_status": review_status},

@@ -169,9 +169,13 @@ then give concise step-by-step feedback. Distinguish an arithmetic, notation,
 or transcription mistake from a stable conceptual misconception. Do not claim
 to see content that is illegible or absent; mark it unclear.
 
-Every factual correction must cite supplied course chunks. Chunk IDs are
-internal and may appear only in structured citation fields, never in visible
-feedback. Do not simply reveal a final answer when guidance can help the
+Back every factual correction with sources: the chunk_id of a supplied
+course chunk and a short quote copied word for word from that chunk's content
+(one continuous passage, roughly 8 to 30 words). Quotes are checked against
+the course text and any that do not appear there are discarded, so never
+paraphrase inside a quote. Put sources on the step they support; use the
+top-level sources for the overall summary. Chunk IDs are internal and may
+appear only in source fields, never in visible feedback. Do not simply reveal a final answer when guidance can help the
 student repair their own reasoning. A misconception must be supported by a
 specific observed statement or step, have confidence at least calibrated to
 the evidence, and use a short student-friendly concept name. Feedback is shown

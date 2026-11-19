@@ -42,9 +42,11 @@ export type WorkAnalysis = {
     observed_reasoning: string;
     status: "correct" | "needs_revision" | "unclear";
     feedback: string;
-    citations: CourseGraphCitation[];
+    citations: SourceCitation[];
+    /** False when a correction couldn't be matched to course text. Missing on older feedback. */
+    grounded?: boolean;
   }>;
-  citations: CourseGraphCitation[];
+  citations: SourceCitation[];
   misconception: {
     detected: boolean;
     concept: string | null;

@@ -81,3 +81,53 @@ def test_show_work_is_off_before_the_migration_is_applied() -> None:
     client = _AsyncMock()
     client.get.return_value = _reply(400, {"message": "column courses.show_work_enabled does not exist"})
     assert _asyncio.run(_work_analysis._show_work_enabled(client, "https://example.com", {}, "course")) is False
+
+
+def _analysis(step_sources, overall_sources, *, status="needs_revision", confidence=0.9):
+    from app.ai.contracts import MisconceptionAnalysis, ShowWorkAnalysis, WorkStepFeedback
+    return ShowWorkAnalysis(
+        observed_work="2x + 3 = 7 so x = 5", summary="Check the subtraction step.", strengths=["Clear layout"],
+        steps=[WorkStepFeedback(step_number=1, observed_reasoning="Added 3", status=status, feedback="Subtract 3 from both sides.", sources=step_sources)],
+        sources=overall_sources,
+        misconception=MisconceptionAnalysis(detected=True, concept="Inverse operations", confidence=confidence),
+        grounded=True, next_step="Redo step 1.",
+    )
+
+
+def _evidence():
+    from app.ai.contracts import EvidenceChunk
+    return [EvidenceChunk(chunk_id="c1", document_id="d1", document_title="Algebra notes.pdf", page_number=4,
+                          content="To undo addition,   subtract the same number from both sides of the equation.")]
+
+
+def test_show_work_keeps_only_quotes_found_in_the_course_text() -> None:
+    from app.ai.contracts import EvidenceQuote
+    from app.routers.work_analysis import _friendly_analysis, _review_status
+
+    real = EvidenceQuote(chunk_id="c1", quote="subtract the same number from both sides")
+    friendly = _friendly_analysis(_analysis([real], []), _evidence())
+    step = friendly["steps"][0]
+    assert step["grounded"] is True
+    assert step["citations"] == [{"document_title": "Algebra notes.pdf", "page_number": 4, "source_kind": "page",
+                                  "chunk_id": "c1", "quote": "subtract the same number from both sides"}]
+    assert friendly["grounded"] is True
+    assert _review_status(friendly) == "pending"
+
+
+def test_show_work_drops_invented_quotes_and_holds_back_the_teacher_flag() -> None:
+    from app.ai.contracts import EvidenceQuote
+    from app.routers.work_analysis import _friendly_analysis, _review_status
+
+    invented = EvidenceQuote(chunk_id="c1", quote="always move numbers across and flip the sign")
+    unknown = EvidenceQuote(chunk_id="nope", quote="subtract the same number from both sides")
+    friendly = _friendly_analysis(_analysis([invented], [unknown]), _evidence())
+    assert friendly["steps"][0]["citations"] == []
+    assert friendly["steps"][0]["grounded"] is False
+    assert friendly["grounded"] is False
+    assert _review_status(friendly) == "not_required"
+
+
+def test_show_work_correct_steps_do_not_need_a_quote() -> None:
+    from app.routers.work_analysis import _friendly_analysis
+    friendly = _friendly_analysis(_analysis([], [], status="correct"), _evidence())
+    assert friendly["steps"][0]["grounded"] is True

@@ -131,7 +131,8 @@ class WorkStepFeedback(BaseModel):
     observed_reasoning: str
     status: Literal["correct", "needs_revision", "unclear"]
     feedback: str
-    citations: list[Citation]
+    # Exact course quotes that back this step's feedback; checked against the chunk text.
+    sources: list[EvidenceQuote] = Field(default_factory=list, max_length=3)
 
 
 class ShowWorkAnalysis(BaseModel):
@@ -139,7 +140,7 @@ class ShowWorkAnalysis(BaseModel):
     summary: str
     strengths: list[str]
     steps: list[WorkStepFeedback]
-    citations: list[Citation]
+    sources: list[EvidenceQuote] = Field(default_factory=list, max_length=3)
     misconception: MisconceptionAnalysis
     grounded: bool
     next_step: str
