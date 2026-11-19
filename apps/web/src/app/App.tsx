@@ -1,32 +1,18 @@
 import React, { lazy, Suspense, useState, useRef, useEffect, useLayoutEffect, useCallback } from "react";
 import { motion, AnimatePresence } from "motion/react";
 import { toast, Toaster } from "sonner";
-import {
-  BookOpen, Users, Brain, TrendingUp, BarChart2, MessageSquare,
-  Zap, Shield, Eye, LogOut, ArrowRight, Send, Home, Target,
-  Award, Bell, Search, CheckCircle, AlertCircle, GraduationCap,
-  Plus, FileText, Settings, Menu, X, Clock,
-  Upload, File, Trash2, CheckSquare, XSquare, RefreshCw,
-  ChevronRight, Lock, Unlock, BookMarked, StickyNote, LineChart,
-  MessageCircle, User, ChevronDown, Star, Copy, Pencil,
-  CheckCheck, Layers, ToggleLeft, ToggleRight, CalendarDays,
-  RotateCcw, Flame, ChevronUp, Sparkles,
-  Mic, Square, Volume2,
-} from "lucide-react";
-import {
-  BarChart, Bar, XAxis, YAxis, CartesianGrid, Tooltip,
-  ResponsiveContainer, AreaChart, Area, RadarChart,
-  PolarGrid, PolarAngleAxis, Radar,
-} from "recharts";
+import { BookOpen, Users, Brain, TrendingUp, BarChart2, MessageSquare, LogOut, ArrowRight, Send, Home, Target, Bell, Search, CheckCircle, AlertCircle, Plus, FileText, Settings, Menu, X, Clock, Upload, File, Trash2, CheckSquare, RefreshCw, ChevronRight, Lock, Unlock, ChevronDown, Copy, Pencil, CheckCheck, Sparkles } from "lucide-react";
+
 import { useAuth } from "../auth/AuthContext";
 import { supabase } from "../lib/supabase";
-import { api, ApiError, type CourseGraphSuggestion, type ExplanationFormat, type SourceCitation, type TeacherInterventionDraft, type WorkSubmission } from "../lib/api";
-import type { AiMessage, Announcement, ChatMessage, HistoryStatus, StudentCourse } from "./student/chatTypes";
-import { renderText } from "./student/renderText";
+import { api, ApiError, type CourseGraphSuggestion, type ExplanationFormat, type TeacherInterventionDraft } from "../lib/api";
+import type { Announcement, ChatMessage, HistoryStatus, StudentCourse } from "./student/chatTypes";
+
 import { useScopedQuery, useScopedRequest } from "./useScopedRequest";
 import { clearStudentSession, readStudentLocation, writeStudentLocation } from "../lib/studentSession";
 
 const CitationPreview = lazy(() => import("./components/CitationPreview"));
+const Landing = lazy(() => import("./Landing"));
 const AskWorkspace = lazy(() => import("./student/AskWorkspace"));
 const TodayStage = lazy(() => import("./teacher/TodayStage"));
 const QuizStage = lazy(() => import("./student/QuizStage"));
@@ -46,26 +32,6 @@ type TeacherTab = "overview" | "students" | "analytics" | "materials" | "setting
 type StudentTab = "workspace" | "work" | "quiz" | "progress" | "enroll" | "settings";
 const STUDENT_TABS: readonly string[] = ["workspace", "work", "quiz", "progress", "enroll", "settings"];
 type InterventionQueueItem = Awaited<ReturnType<typeof api.teacherCourseAnalytics>>["intervention_queue"][number];
-
-
-type MisconceptionEntry = {
-  id: number;
-  student: string;
-  initials: string;
-  topic: string;
-  misconception: string;
-  flaggedAt: string;
-  status: "open" | "addressed";
-};
-
-type QuizAttempt = {
-  id: number;
-  date: string;
-  topic: string;
-  score: number;
-  total: number;
-  duration: string;
-};
 
 function initialsFor(name?: string | null): string {
   if (!name) return "?";
@@ -102,108 +68,6 @@ type EnrollRequest = {
 };
 
 // ─── Data ─────────────────────────────────────────────────────────────────
-
-const TOPIC_DATA = [
-  { topic: "Photosynthesis", score: 78 },
-  { topic: "Cell Division", score: 65 },
-  { topic: "DNA Replication", score: 82 },
-  { topic: "Protein Synth.", score: 54 },
-  { topic: "Evolution", score: 71 },
-  { topic: "Genetics", score: 69 },
-];
-
-const WEEKLY_DATA = [
-  { week: "Wk 1", avg: 58 },
-  { week: "Wk 2", avg: 62 },
-  { week: "Wk 3", avg: 65 },
-  { week: "Wk 4", avg: 67 },
-  { week: "Wk 5", avg: 72 },
-  { week: "Wk 6", avg: 70 },
-  { week: "Wk 7", avg: 76 },
-  { week: "Wk 8", avg: 79 },
-];
-
-const RADAR_DATA = [
-  { subject: "Genetics", score: 78 },
-  { subject: "Cell Bio", score: 52 },
-  { subject: "Ecology", score: 88 },
-  { subject: "Evolution", score: 65 },
-  { subject: "Biochem", score: 43 },
-  { subject: "Anatomy", score: 71 },
-];
-
-const STUDENTS = [
-  { id: 1, name: "Amara Osei", initials: "AO", progress: 82, weak: ["Protein Synthesis", "Meiosis"], quizzes: 14, status: "active" },
-  { id: 2, name: "Liam Torres", initials: "LT", progress: 54, weak: ["Cell Division", "DNA Replication"], quizzes: 8, status: "struggling" },
-  { id: 3, name: "Priya Nair", initials: "PN", progress: 91, weak: [], quizzes: 19, status: "excelling" },
-  { id: 4, name: "Marcus Webb", initials: "MW", progress: 67, weak: ["Genetics", "Evolution"], quizzes: 11, status: "active" },
-  { id: 5, name: "Sofia Reyes", initials: "SR", progress: 48, weak: ["Protein Synthesis", "Photosynthesis"], quizzes: 6, status: "struggling" },
-  { id: 6, name: "Kai Yamamoto", initials: "KY", progress: 75, weak: ["Cell Division"], quizzes: 13, status: "active" },
-  { id: 7, name: "Zoe Chen", initials: "ZC", progress: 88, weak: [], quizzes: 17, status: "excelling" },
-];
-
-const INITIAL_REQUESTS: EnrollRequest[] = [
-  { id: 1, name: "Jordan Kim", initials: "JK", email: "jordan@student.edu", code: "BIO-3F8K", course: "Biology 101", requestedAt: "2h ago", status: "pending" },
-  { id: 2, name: "Nadia Patel", initials: "NP", email: "nadia@student.edu", code: "BIO-3F8K", course: "Biology 101", requestedAt: "4h ago", status: "pending" },
-  { id: 3, name: "Theo Larsen", initials: "TL", email: "theo@student.edu", code: "GEN-7X2Q", course: "Advanced Genetics", requestedAt: "1d ago", status: "pending" },
-];
-
-const INITIAL_CHAT: ChatMessage[] = [
-  { role: "user", text: "Can you explain the difference between mitosis and meiosis?" },
-  {
-    role: "ai",
-    text: "Great question! Both are processes of cell division, but they serve different purposes:\n\n**Mitosis** produces two genetically identical diploid daughter cells — used for growth and repair in somatic cells.\n\n**Meiosis** produces four genetically unique haploid cells (gametes) — used for sexual reproduction, and introduces variation through crossing over during Prophase I.",
-    citations: ["Chapter 12 — Cell Division", "Lecture Notes: Week 4"],
-    misconception: null,
-  },
-  { role: "user", text: "So meiosis just splits the DNA in half?" },
-  {
-    role: "ai",
-    text: "That's a common misconception worth addressing. Meiosis doesn't simply cut the DNA in half — it's a two-stage process.\n\nIt involves **two sequential divisions** (Meiosis I and II). During Prophase I, homologous chromosomes pair up and exchange segments via **crossing over**, actively creating new genetic combinations — not just splitting existing ones.\n\nThe result: 4 cells with half the chromosome count AND reshuffled genetic content.",
-    citations: ["Chapter 12 — Cell Division", "Supplementary: Genetic Variation"],
-    misconception: "Misconception flagged: meiosis doesn't simply halve chromosomes — crossing over creates new allele combinations.",
-  },
-];
-
-const CANNED_RESPONSES: AiMessage[] = [
-  {
-    role: "ai",
-    text: "Based on your Biology 101 materials, this concept is addressed in Chapter 12. The key principle is that cell processes are regulated by enzyme activity and gene expression working in concert.\n\nWould you like me to generate a targeted quiz on this topic to test your understanding?",
-    citations: ["Chapter 12 — Cell Division", "Supplementary Notes"],
-    misconception: null,
-  },
-  {
-    role: "ai",
-    text: "Your course materials address this in the Week 5 lecture notes. The main idea is that biological systems maintain homeostasis through feedback mechanisms — both positive and negative.\n\nThis is a high-priority concept for your upcoming assessment. Want me to walk you through a practice scenario?",
-    citations: ["Lecture Notes: Week 5", "Chapter 8 — Homeostasis"],
-    misconception: null,
-  },
-];
-
-const QUIZ = {
-  total: 8, current: 3,
-  topic: "Cell Division — Meiosis",
-  question: "Which phase of meiosis is responsible for genetic recombination through crossing over?",
-  options: ["Metaphase I", "Prophase I", "Anaphase II", "Telophase I"],
-  correct: 1,
-  explanation: "Crossing over occurs during **Prophase I**, when homologous chromosomes pair up (synapsis) and exchange DNA segments. This creates new allele combinations not present in either parent and is the primary source of genetic variation in sexual reproduction.",
-};
-
-const FEATURES = [
-  { icon: MessageSquare, title: "Course-Grounded Q&A", desc: "Every answer comes directly from uploaded course material, with citations to the exact source document." },
-  { icon: Brain, title: "Misconception Detection", desc: "AI reads between the lines of student explanations to catch where understanding breaks down — not just what's wrong." },
-  { icon: Zap, title: "Adaptive Quizzes", desc: "Question sets that target each student's weak areas and recalibrate as mastery improves over time." },
-  { icon: TrendingUp, title: "Progress Analytics", desc: "Granular topic-by-topic mastery tracking, visible to both students and teachers with trend data." },
-  { icon: Eye, title: "Teacher Insight Reports", desc: "Class-wide misconception maps and per-student summaries, so teachers always know who needs help." },
-  { icon: Shield, title: "Hallucination Guardrails", desc: "The AI only answers what the course material supports. Unsupported questions are flagged, not fabricated." },
-];
-
-const SAMPLE_FILES = [
-  "Chapter 13 — Genetic Variation.pdf",
-  "Lecture Slides Week 6.pdf",
-  "Problem Set 3 — Answers.pdf",
-  "Midterm Study Guide.pdf",
-];
 
 type Notification = {
   id: string;
@@ -253,24 +117,6 @@ function relativeTime(value: string): string {
   return new Date(value).toLocaleDateString();
 }
 
-const STUDENT_QUIZ_TREND = [
-  { week: "Wk 1", score: 52 },
-  { week: "Wk 2", score: 58 },
-  { week: "Wk 3", score: 54 },
-  { week: "Wk 4", score: 63 },
-  { week: "Wk 5", score: 61 },
-  { week: "Wk 6", score: 70 },
-  { week: "Wk 7", score: 74 },
-  { week: "Wk 8", score: 82 },
-];
-
-const STUDENT_CHAT_SAMPLE: ChatMessage[] = [
-  { role: "user", text: "Can you explain what crossing over does exactly?" },
-  { role: "ai", text: "Crossing over happens during Prophase I of meiosis. Homologous chromosomes pair up and physically exchange segments of DNA, creating new allele combinations on each chromosome.", citations: ["Chapter 12 — Cell Division"], misconception: null },
-  { role: "user", text: "So the chromosomes break?" },
-  { role: "ai", text: "They do break and rejoin, but it's tightly controlled by enzymes. The key misconception to avoid: the breaks are not random damage — they're deliberate recombination events that produce new genetic variation.", citations: ["Chapter 12 — Cell Division"], misconception: "Misconception flagged: chromosomal breaks in crossing over are enzymatically controlled recombination, not damage." },
-];
-
 type TeacherCourse = {
   id: string;
   name: string;
@@ -304,93 +150,6 @@ const courseFromRow = (row: CourseRow): TeacherCourse => ({
   created_at: row.created_at,
   showWork: Boolean(row.show_work_enabled),
 });
-
-
-const INITIAL_ANNOUNCEMENTS: Announcement[] = [
-  { id: "demo-1", title: "Midterm exam — Chapter 10–14 in scope", body: "The midterm on July 18 will cover all material from Chapters 10 through 14.", course: "Biology 101", createdAt: "2h ago", pinned: true },
-];
-
-const MISCONCEPTION_LOG: MisconceptionEntry[] = [
-  { id: 1, student: "Liam Torres", initials: "LT", topic: "Protein Synthesis", misconception: "Treats transcription and translation as a single step — conflates mRNA with the final protein.", flaggedAt: "Today, 11:24 AM", status: "open" },
-  { id: 2, student: "Sofia Reyes", initials: "SR", topic: "Cell Division", misconception: "Believes meiosis and mitosis produce the same number and type of daughter cells.", flaggedAt: "Today, 9:03 AM", status: "open" },
-  { id: 3, student: "Marcus Webb", initials: "MW", topic: "Genetics", misconception: "Conflates dominant allele with 'more common in the population' — frequency vs. dominance confusion.", flaggedAt: "Yesterday, 2:15 PM", status: "open" },
-  { id: 4, student: "Amara Osei", initials: "AO", topic: "DNA Replication", misconception: "Thought the new strand replaces the original rather than understanding the semi-conservative model.", flaggedAt: "Jun 28, 10:40 AM", status: "addressed" },
-  { id: 5, student: "Kai Yamamoto", initials: "KY", topic: "Cell Division", misconception: "Confused crossing over timing — thought it happens in Metaphase I rather than Prophase I.", flaggedAt: "Jun 27, 3:55 PM", status: "addressed" },
-  { id: 6, student: "Priya Nair", initials: "PN", topic: "Evolution", misconception: "Described natural selection as organisms 'wanting' to adapt — teleological framing.", flaggedAt: "Jun 25, 11:00 AM", status: "addressed" },
-];
-
-const STUDENT_QUIZ_HISTORY: QuizAttempt[] = [
-  { id: 1, date: "Jul 9", topic: "Cell Division — Meiosis", score: 3, total: 4, duration: "4m 12s" },
-  { id: 2, date: "Jul 7", topic: "Genetics — Inheritance", score: 2, total: 4, duration: "5m 48s" },
-  { id: 3, date: "Jul 5", topic: "Protein Synthesis", score: 3, total: 4, duration: "3m 55s" },
-  { id: 4, date: "Jul 2", topic: "DNA Replication", score: 4, total: 4, duration: "4m 01s" },
-  { id: 5, date: "Jun 30", topic: "Cell Division — Mitosis", score: 2, total: 4, duration: "6m 20s" },
-  { id: 6, date: "Jun 28", topic: "Evolution & Natural Selection", score: 3, total: 4, duration: "4m 44s" },
-  { id: 7, date: "Jun 26", topic: "Ecology — Biomes", score: 4, total: 4, duration: "3m 15s" },
-  { id: 8, date: "Jun 24", topic: "Cell Biology — Organelles", score: 2, total: 4, duration: "5m 33s" },
-];
-
-// ─── Helpers ──────────────────────────────────────────────────────────────
-
-function statusStyle(s: string) {
-  if (s === "excelling") return "text-emerald-700 bg-emerald-50 border-emerald-200";
-  if (s === "struggling") return "text-red-700 bg-red-50 border-red-200";
-  return "text-blue-700 bg-blue-50 border-blue-200";
-}
-
-function barColor(p: number) {
-  if (p >= 80) return "bg-emerald-500";
-  if (p >= 60) return "bg-amber-500";
-  return "bg-red-500";
-}
-
-function CourseCitationList({ courseId, citations, darkMode }: {
-  courseId: string;
-  citations: Array<SourceCitation | string>;
-  darkMode: boolean;
-}) {
-  return (
-    <div className="grid gap-1.5">
-      <Suspense fallback={<p role="status" className="text-xs text-muted-foreground">Loading sources…</p>}>
-        {citations.map((citation, index) => (
-          <CitationPreview key={index} courseId={courseId} citation={citation} darkMode={darkMode} />
-        ))}
-      </Suspense>
-    </div>
-  );
-}
-
-function Skeleton({ className = "" }: { className?: string }) {
-  return <div className={`animate-pulse bg-muted rounded ${className}`} />;
-}
-
-function TypingIndicator() {
-  return (
-    <div className="flex items-center gap-1 px-1 py-2">
-      {[0, 1, 2].map(i => (
-        <motion.div key={i} className="w-1.5 h-1.5 rounded-full bg-muted-foreground/50"
-          animate={{ opacity: [0.3, 1, 0.3], y: [0, -4, 0] }}
-          transition={{ duration: 0.9, repeat: Infinity, delay: i * 0.18, ease: "easeInOut" }}
-        />
-      ))}
-    </div>
-  );
-}
-
-function ChartTooltip({ active, payload, label }: any) {
-  if (!active || !payload?.length) return null;
-  return (
-    <div className="bg-card border border-border shadow-lg rounded-lg px-4 py-3 min-w-[120px]">
-      <div className="font-mono text-xs text-muted-foreground mb-2">{label}</div>
-      {payload.map((p: any, i: number) => (
-        <div key={i} className="flex items-center gap-2">
-          <div className="w-2 h-2 rounded-full shrink-0" style={{ background: p.color || p.fill }} />
-          <span className="text-sm font-semibold text-foreground">{p.value}%</span>
-        </div>
-      ))}
-    </div>
-  );
-}
 
 // ─── Upload Modal ─────────────────────────────────────────────────────────
 
@@ -545,7 +304,6 @@ function UploadModal({ onClose, onUploaded, onProcessed, courseId, courseName, u
     </div>
   );
 }
-
 
 // ─── Student Enroll Tab ───────────────────────────────────────────────────
 
@@ -1020,409 +778,6 @@ function NotificationsPanel({ open, onClose, notifications, setNotifications, on
         </>
       )}
     </AnimatePresence>
-  );
-}
-
-// ─── Student Insight Drawer ───────────────────────────────────────────────
-
-type StudentRecord = typeof STUDENTS[number];
-
-function StudentInsightDrawer({ student, onClose }: {
-  student: StudentRecord | null;
-  onClose: () => void;
-}) {
-  const [note, setNote] = useState("");
-  const [savedNote, setSavedNote] = useState("");
-  const [chatOpen, setChatOpen] = useState(false);
-
-  useEffect(() => { setSavedNote(""); setNote(""); setChatOpen(false); }, [student]);
-
-  if (!student) return null;
-
-  const quizHistory = [
-    { topic: "Cell Division — Basics", score: 72, date: "Jun 10", questions: 8 },
-    { topic: "Meiosis — Phases", score: student.progress < 60 ? 41 : 65, date: "Jun 14", questions: 8 },
-    { topic: "Protein Synthesis", score: student.progress < 60 ? 38 : 58, date: "Jun 18", questions: 10 },
-    { topic: "Genetics — Mendelian", score: student.progress < 60 ? 44 : 70, date: "Jun 22", questions: 8 },
-    { topic: "DNA Replication", score: student.progress < 60 ? 55 : 78, date: "Jun 26", questions: 8 },
-  ];
-
-  return (
-    <AnimatePresence>
-      {student && (
-        <>
-          <div className="fixed inset-0 z-40 bg-black/30" onClick={onClose} />
-          <motion.aside
-            initial={{ x: "100%" }}
-            animate={{ x: 0 }}
-            exit={{ x: "100%" }}
-            transition={{ type: "spring", damping: 28, stiffness: 260 }}
-            className="fixed inset-y-0 right-0 z-50 w-full max-w-xl bg-background border-l border-border flex flex-col shadow-2xl"
-          >
-            {/* Header */}
-            <div className="flex items-center gap-4 px-6 py-5 border-b border-border bg-card">
-              <div className="w-12 h-12 rounded-full bg-primary/10 text-primary flex items-center justify-center text-sm font-bold shrink-0">
-                {student.initials}
-              </div>
-              <div className="flex-1 min-w-0">
-                <h2 className="font-display text-xl text-primary">{student.name}</h2>
-                <div className="flex items-center gap-3 mt-0.5">
-                  <span className={`text-xs font-medium px-2 py-0.5 rounded-full border capitalize ${statusStyle(student.status)}`}>{student.status}</span>
-                  <span className="text-xs text-muted-foreground font-light">Biology 101 · {student.quizzes} quizzes taken</span>
-                </div>
-              </div>
-              <button onClick={onClose} className="p-2 hover:bg-muted rounded-lg transition-colors text-muted-foreground shrink-0">
-                <X size={16} />
-              </button>
-            </div>
-
-            <div className="flex-1 overflow-y-auto">
-              {/* Mastery overview */}
-              <div className="px-6 pt-6 pb-4">
-                <div className="grid grid-cols-3 gap-3 mb-6">
-                  {[
-                    { label: "Overall Mastery", val: `${student.progress}%`, color: barColor(student.progress) },
-                    { label: "Quizzes Taken", val: String(student.quizzes), color: "bg-blue-500" },
-                    { label: "Weak Topics", val: String(student.weak.length || "None"), color: student.weak.length ? "bg-red-500" : "bg-emerald-500" },
-                  ].map(s => (
-                    <div key={s.label} className="bg-muted/50 border border-border rounded-xl p-4 text-center">
-                      <div className="font-display text-2xl text-primary">{s.val}</div>
-                      <div className="text-xs text-muted-foreground mt-1 font-light">{s.label}</div>
-                    </div>
-                  ))}
-                </div>
-
-                {/* Quiz score trend */}
-                <div className="bg-card border border-border rounded-xl p-5 mb-4 shadow-sm">
-                  <div className="flex items-center gap-2 mb-4">
-                    <LineChart size={14} className="text-muted-foreground" />
-                    <h3 className="font-semibold text-foreground text-sm">Quiz Score Trend</h3>
-                  </div>
-                  <ResponsiveContainer width="100%" height={140}>
-                    <AreaChart data={STUDENT_QUIZ_TREND.map(d => ({ ...d, score: d.score + (student.progress - 68) * 0.3 }))}>
-                      <defs>
-                        <linearGradient id="studentGrad" x1="0" y1="0" x2="0" y2="1">
-                          <stop offset="5%" stopColor="#1C2B4A" stopOpacity={0.1} />
-                          <stop offset="95%" stopColor="#1C2B4A" stopOpacity={0} />
-                        </linearGradient>
-                      </defs>
-                      <CartesianGrid strokeDasharray="3 3" stroke="rgba(17,24,39,0.05)" vertical={false} />
-                      <XAxis dataKey="week" tick={{ fontSize: 10, fill: "var(--muted-foreground)" }} axisLine={false} tickLine={false} />
-                      <YAxis tick={{ fontSize: 10, fill: "var(--muted-foreground)" }} axisLine={false} tickLine={false} domain={[30, 100]} tickFormatter={(v: number) => `${v}%`} />
-                      <Tooltip content={<ChartTooltip />} />
-                      <Area type="monotone" dataKey="score" stroke="#1C2B4A" strokeWidth={2} fill="url(#studentGrad)"
-                        dot={{ fill: "#1C2B4A", r: 2.5, strokeWidth: 0 }} activeDot={{ r: 4, fill: "#E8A020", strokeWidth: 0 }} />
-                    </AreaChart>
-                  </ResponsiveContainer>
-                </div>
-
-                {/* Quiz history */}
-                <div className="bg-card border border-border rounded-xl overflow-hidden shadow-sm mb-4">
-                  <div className="px-5 py-3.5 border-b border-border">
-                    <h3 className="font-semibold text-foreground text-sm">Recent Quizzes</h3>
-                  </div>
-                  {quizHistory.map((q, i) => (
-                    <div key={i} className="flex items-center gap-4 px-5 py-3 border-b border-border last:border-0 hover:bg-muted/20 transition-colors">
-                      <div className="flex-1 min-w-0">
-                        <div className="text-sm font-medium text-foreground truncate">{q.topic}</div>
-                        <div className="text-xs text-muted-foreground font-light mt-0.5">{q.date} · {q.questions} questions</div>
-                      </div>
-                      <div className="flex items-center gap-3 shrink-0">
-                        <div className="w-20 h-1.5 bg-muted rounded-full overflow-hidden">
-                          <div className={`h-full rounded-full ${barColor(q.score)}`} style={{ width: `${q.score}%` }} />
-                        </div>
-                        <span className={`font-mono text-sm font-bold tabular-nums ${q.score < 60 ? "text-red-600" : q.score < 75 ? "text-amber-600" : "text-emerald-600"}`}>
-                          {q.score}%
-                        </span>
-                      </div>
-                    </div>
-                  ))}
-                </div>
-
-                {/* Weak topics */}
-                {student.weak.length > 0 && (
-                  <div className="bg-red-50 border border-red-100 rounded-xl p-4 mb-4">
-                    <h3 className="font-semibold text-foreground text-sm mb-3 flex items-center gap-2">
-                      <AlertCircle size={14} className="text-red-500" />Identified Weak Areas
-                    </h3>
-                    <div className="flex flex-wrap gap-2">
-                      {student.weak.map(w => (
-                        <span key={w} className="text-xs bg-red-100 text-red-700 border border-red-200 px-2.5 py-1 rounded-full font-medium">{w}</span>
-                      ))}
-                    </div>
-                  </div>
-                )}
-
-                {/* Recent Q&A */}
-                <div className="bg-card border border-border rounded-xl overflow-hidden shadow-sm mb-4">
-                  <button
-                    onClick={() => setChatOpen(v => !v)}
-                    className="w-full flex items-center justify-between px-5 py-3.5 hover:bg-muted/20 transition-colors"
-                  >
-                    <h3 className="font-semibold text-foreground text-sm flex items-center gap-2">
-                      <MessageCircle size={14} className="text-muted-foreground" />Recent Q&A History
-                    </h3>
-                    {chatOpen ? <ChevronUp size={14} className="text-muted-foreground" /> : <ChevronDown size={14} className="text-muted-foreground" />}
-                  </button>
-                  <AnimatePresence initial={false}>
-                    {chatOpen && (
-                      <motion.div
-                        initial={{ height: 0, opacity: 0 }}
-                        animate={{ height: "auto", opacity: 1 }}
-                        exit={{ height: 0, opacity: 0 }}
-                        transition={{ duration: 0.22 }}
-                        className="overflow-hidden"
-                      >
-                        <div className="px-5 pb-4 space-y-3 border-t border-border pt-4">
-                          {STUDENT_CHAT_SAMPLE.map((msg, i) => (
-                            <div key={i} className={`flex gap-2 ${msg.role === "user" ? "flex-row-reverse" : ""}`}>
-                              <div className={`rounded-xl px-3 py-2 text-xs leading-relaxed max-w-[80%] ${msg.role === "user" ? "bg-primary text-primary-foreground" : "bg-muted text-foreground"}`}>
-                                {renderText(msg.text)}
-                              </div>
-                            </div>
-                          ))}
-                        </div>
-                      </motion.div>
-                    )}
-                  </AnimatePresence>
-                </div>
-
-                {/* Teacher note */}
-                <div className="bg-card border border-border rounded-xl p-5 shadow-sm">
-                  <h3 className="font-semibold text-foreground text-sm mb-3 flex items-center gap-2">
-                    <StickyNote size={14} className="text-muted-foreground" />Teacher Note
-                  </h3>
-                  {savedNote ? (
-                    <div>
-                      <p className="text-sm text-foreground font-light leading-relaxed bg-amber-50 border border-amber-100 rounded-lg px-4 py-3">{savedNote}</p>
-                      <button onClick={() => setSavedNote("")} className="text-xs text-muted-foreground hover:text-foreground mt-2 transition-colors">Edit note</button>
-                    </div>
-                  ) : (
-                    <div>
-                      <textarea
-                        value={note}
-                        onChange={e => setNote(e.target.value)}
-                        placeholder={`Add a private note about ${student.name.split(" ")[0]}…`}
-                        rows={3}
-                        className="w-full border border-border rounded-xl px-4 py-3 text-sm bg-background focus:outline-none focus:ring-2 focus:ring-ring resize-none font-light"
-                      />
-                      <div className="flex justify-end mt-2">
-                        <motion.button whileHover={{ scale: 1.02 }} whileTap={{ scale: 0.97 }}
-                          disabled={!note.trim()}
-                          onClick={() => { setSavedNote(note); setNote(""); toast.success("Note saved"); }}
-                          className="text-xs font-semibold bg-primary text-primary-foreground px-4 py-2 rounded-lg disabled:opacity-40"
-                        >
-                          Save Note
-                        </motion.button>
-                      </div>
-                    </div>
-                  )}
-                </div>
-              </div>
-            </div>
-          </motion.aside>
-        </>
-      )}
-    </AnimatePresence>
-  );
-}
-
-// ─── Landing ──────────────────────────────────────────────────────────────
-
-function Landing({ onNavigate }: { onNavigate: (v: View, role?: "teacher" | "student") => void }) {
-  return (
-    <div className="min-h-screen bg-background">
-      <nav className="fixed top-0 inset-x-0 z-50 bg-background/90 backdrop-blur-md border-b border-border">
-        <div className="max-w-6xl mx-auto px-6 h-16 flex items-center justify-between">
-          <span className="font-display text-xl text-primary tracking-tight">EduBridge AI</span>
-          <div className="hidden md:flex items-center gap-8 text-sm font-medium text-muted-foreground">
-            <a href="#features" className="hover:text-foreground transition-colors">Features</a>
-            <a href="#how-it-works" className="hover:text-foreground transition-colors">How It Works</a>
-          </div>
-          <div className="flex items-center gap-3">
-            <button onClick={() => onNavigate("auth")} className="text-sm font-medium text-foreground px-4 py-2 hover:bg-muted rounded-lg transition-colors">Sign In</button>
-            <motion.button whileHover={{ scale: 1.02 }} whileTap={{ scale: 0.97 }}
-              onClick={() => onNavigate("auth", "teacher")}
-              className="text-sm font-semibold bg-primary text-primary-foreground px-4 py-2 rounded-lg hover:opacity-90 transition-opacity shadow-sm"
-            >Get Started</motion.button>
-          </div>
-        </div>
-      </nav>
-
-      <section className="relative bg-primary text-primary-foreground pt-32 pb-28 px-6 overflow-hidden">
-        <svg className="absolute inset-0 w-full h-full opacity-[0.07] pointer-events-none">
-          <defs><pattern id="dots" x="0" y="0" width="24" height="24" patternUnits="userSpaceOnUse"><circle cx="1.5" cy="1.5" r="1.5" fill="currentColor" /></pattern></defs>
-          <rect width="100%" height="100%" fill="url(#dots)" />
-        </svg>
-        <div className="relative max-w-6xl mx-auto grid grid-cols-1 lg:grid-cols-2 gap-16 items-center">
-          <div>
-            <span className="inline-block font-mono text-xs tracking-widest uppercase text-accent mb-6">Misconception-Aware Academic AI</span>
-            <h1 className="font-display text-5xl lg:text-6xl leading-tight mb-6">Close the gap between teaching and understanding.</h1>
-            <p className="text-primary-foreground/70 text-lg leading-relaxed mb-10 max-w-lg font-light">
-              EduBridge AI helps students learn from course material while giving teachers real visibility into who's struggling and why.
-            </p>
-            <div className="flex flex-col sm:flex-row gap-4">
-              <motion.button whileHover={{ scale: 1.02 }} whileTap={{ scale: 0.97 }}
-                onClick={() => onNavigate("auth", "teacher")}
-                className="group flex items-center justify-center gap-2 bg-accent text-accent-foreground font-semibold px-6 py-3.5 rounded-lg shadow-lg shadow-amber-900/20"
-              >
-                <GraduationCap size={18} />I'm a Teacher
-                <ArrowRight size={16} className="group-hover:translate-x-1 transition-transform" />
-              </motion.button>
-              <motion.button whileHover={{ scale: 1.02 }} whileTap={{ scale: 0.97 }}
-                onClick={() => onNavigate("auth", "student")}
-                className="flex items-center justify-center gap-2 border border-primary-foreground/25 text-primary-foreground font-medium px-6 py-3.5 rounded-lg hover:bg-primary-foreground/10 transition-colors"
-              >
-                <BookOpen size={18} />I'm a Student
-              </motion.button>
-            </div>
-          </div>
-          <div className="hidden lg:block">
-            <motion.div animate={{ y: [0, -10, 0] }} transition={{ duration: 5, repeat: Infinity, ease: "easeInOut" }}>
-              <div className="bg-primary-foreground/10 backdrop-blur-sm rounded-xl p-5 border border-primary-foreground/15 shadow-2xl shadow-black/30">
-                <div className="flex items-center gap-2 mb-5">
-                  <div className="w-3 h-3 rounded-full bg-red-400/60" /><div className="w-3 h-3 rounded-full bg-yellow-400/60" /><div className="w-3 h-3 rounded-full bg-green-400/60" />
-                  <span className="ml-2 font-mono text-xs text-primary-foreground/35">teacher dashboard</span>
-                </div>
-                <div className="grid grid-cols-3 gap-2 mb-4">
-                  {[{ label: "Students", val: "40" }, { label: "Avg. Mastery", val: "68%" }, { label: "Flags", val: "5" }].map(s => (
-                    <div key={s.label} className="bg-primary-foreground/10 rounded-lg p-3">
-                      <div className="text-xl font-bold text-primary-foreground">{s.val}</div>
-                      <div className="text-xs text-primary-foreground/45 font-mono mt-0.5">{s.label}</div>
-                    </div>
-                  ))}
-                </div>
-                <div className="space-y-2 mb-4">
-                  {STUDENTS.slice(0, 4).map(s => (
-                    <div key={s.id} className="flex items-center gap-3 bg-primary-foreground/5 rounded-lg px-3 py-2">
-                      <div className="w-7 h-7 rounded-full bg-accent/25 text-accent flex items-center justify-center text-xs font-bold shrink-0">{s.initials}</div>
-                      <span className="text-xs text-primary-foreground/75 flex-1 min-w-0 truncate">{s.name}</span>
-                      <div className="w-16 h-1 bg-primary-foreground/10 rounded-full shrink-0">
-                        <div className="h-full rounded-full bg-accent" style={{ width: `${s.progress}%` }} />
-                      </div>
-                      <span className="font-mono text-xs text-primary-foreground/45 shrink-0 tabular-nums">{s.progress}%</span>
-                    </div>
-                  ))}
-                </div>
-                <div className="bg-amber-500/15 border border-amber-500/25 rounded-lg p-3">
-                  <div className="flex items-center gap-2 text-xs text-amber-300 font-medium">
-                    <AlertCircle size={12} className="shrink-0" />2 students struggling with Protein Synthesis
-                  </div>
-                </div>
-              </div>
-            </motion.div>
-          </div>
-        </div>
-      </section>
-
-      <section className="bg-muted border-b border-border">
-        <div className="max-w-6xl mx-auto px-6 py-8 grid grid-cols-2 md:grid-cols-4 gap-8">
-          {[
-            { val: "94%", label: "Answer accuracy vs. source material" },
-            { val: "3×", label: "Faster misconception identification" },
-            { val: "40+", label: "Trackable learning topics" },
-            { val: "100%", label: "Source-grounded responses" },
-          ].map(s => (
-            <div key={s.label}>
-              <div className="font-display text-3xl text-primary mb-1">{s.val}</div>
-              <div className="text-sm text-muted-foreground font-light">{s.label}</div>
-            </div>
-          ))}
-        </div>
-      </section>
-
-      <section id="features" className="py-24 px-6">
-        <div className="max-w-6xl mx-auto">
-          <div className="mb-14">
-            <span className="font-mono text-xs tracking-widest uppercase text-muted-foreground">Capabilities</span>
-            <h2 className="font-display text-4xl text-primary mt-2">Built for how learning actually works.</h2>
-          </div>
-          <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-px bg-border">
-            {FEATURES.map((f, i) => (
-              <motion.div key={i} whileHover={{ y: -3, boxShadow: "0 8px 24px rgba(0,0,0,0.08)" }}
-                className="bg-background p-8 transition-shadow cursor-default"
-              >
-                <div className="w-10 h-10 rounded-lg bg-accent/10 flex items-center justify-center mb-5">
-                  <f.icon size={18} className="text-accent" />
-                </div>
-                <h3 className="font-semibold text-foreground mb-2">{f.title}</h3>
-                <p className="text-sm text-muted-foreground leading-relaxed font-light">{f.desc}</p>
-              </motion.div>
-            ))}
-          </div>
-        </div>
-      </section>
-
-      <section id="how-it-works" className="bg-muted py-24 px-6">
-        <div className="max-w-6xl mx-auto">
-          <div className="mb-14">
-            <span className="font-mono text-xs tracking-widest uppercase text-muted-foreground">Workflow</span>
-            <h2 className="font-display text-4xl text-primary mt-2">Simple setup. Deep insight.</h2>
-          </div>
-          <div className="grid grid-cols-1 lg:grid-cols-2 gap-16">
-            {[
-              { label: "For Teachers", color: "text-accent", steps: [
-                { n: "01", title: "Create a course", desc: "Name your course and receive a unique class code to share with students." },
-                { n: "02", title: "Upload materials", desc: "Upload PDFs, slides, or scanned notes. OCR handles handwritten documents." },
-                { n: "03", title: "Approve enrollments", desc: "Review and approve student join requests. Keep full control of your class." },
-                { n: "04", title: "Monitor & act", desc: "See who's struggling, what they misunderstand, and get AI-generated suggestions." },
-              ]},
-              { label: "For Students", color: "text-blue-500", steps: [
-                { n: "01", title: "Join your class", desc: "Enter the class code your teacher shared to request enrollment." },
-                { n: "02", title: "Ask anything", desc: "Ask course-related questions and get accurate, cited answers from your materials." },
-                { n: "03", title: "Take adaptive quizzes", desc: "Targeted quizzes probe your weak areas and track improvement over time." },
-                { n: "04", title: "Understand your gaps", desc: "Get plain-language feedback on where your understanding falls short." },
-              ]},
-            ].map(col => (
-              <div key={col.label}>
-                <div className={`font-mono text-xs ${col.color} uppercase tracking-widest mb-6`}>{col.label}</div>
-                <div className="space-y-7">
-                  {col.steps.map(step => (
-                    <div key={step.n} className="flex gap-5">
-                      <span className="font-mono text-2xl font-bold text-foreground/15 shrink-0 w-8 tabular-nums">{step.n}</span>
-                      <div>
-                        <div className="font-semibold text-foreground mb-1">{step.title}</div>
-                        <div className="text-sm text-muted-foreground font-light leading-relaxed">{step.desc}</div>
-                      </div>
-                    </div>
-                  ))}
-                </div>
-              </div>
-            ))}
-          </div>
-        </div>
-      </section>
-
-      <section className="relative bg-primary text-primary-foreground py-24 px-6 overflow-hidden">
-        <svg className="absolute inset-0 w-full h-full opacity-[0.06] pointer-events-none">
-          <defs><pattern id="dots2" x="0" y="0" width="24" height="24" patternUnits="userSpaceOnUse"><circle cx="1.5" cy="1.5" r="1.5" fill="currentColor" /></pattern></defs>
-          <rect width="100%" height="100%" fill="url(#dots2)" />
-        </svg>
-        <div className="relative max-w-2xl mx-auto text-center">
-          <h2 className="font-display text-4xl mb-4">Ready to bridge the gap?</h2>
-          <p className="text-primary-foreground/60 mb-10 font-light text-lg">Join teachers and students already using EduBridge AI.</p>
-          <div className="flex flex-col sm:flex-row gap-4 justify-center">
-            <motion.button whileHover={{ scale: 1.02 }} whileTap={{ scale: 0.97 }} onClick={() => onNavigate("auth", "teacher")}
-              className="flex items-center justify-center gap-2 bg-accent text-accent-foreground font-semibold px-8 py-4 rounded-lg shadow-lg shadow-amber-900/20"
-            >
-              <GraduationCap size={18} />Start as Teacher
-            </motion.button>
-            <motion.button whileHover={{ scale: 1.02 }} whileTap={{ scale: 0.97 }} onClick={() => onNavigate("auth", "student")}
-              className="flex items-center justify-center gap-2 border border-primary-foreground/25 text-primary-foreground font-medium px-8 py-4 rounded-lg hover:bg-primary-foreground/10 transition-colors"
-            >
-              <BookOpen size={18} />Start as Student
-            </motion.button>
-          </div>
-        </div>
-      </section>
-
-      <footer className="border-t border-border py-8 px-6">
-        <div className="max-w-6xl mx-auto flex items-center justify-between text-sm text-muted-foreground">
-          <span className="font-display text-base text-primary">EduBridge AI</span>
-          <span className="font-light">© 2025 EduBridge AI. All rights reserved.</span>
-        </div>
-      </footer>
-    </div>
   );
 }
 
@@ -2599,7 +1954,6 @@ function StudentDashboard({ onLogout, darkMode, setDarkMode }: { onLogout: () =>
   );
 }
 
-
 // ─── Course Create Modal ──────────────────────────────────────────────────
 
 const SUBJECT_OPTIONS = ["Biology", "Chemistry", "Physics", "Mathematics", "Computer Science", "History", "English", "Other"];
@@ -3498,7 +2852,7 @@ export default function App() {
   return (
     <div className={darkMode ? "dark" : ""}>
       <Toaster position="bottom-right" toastOptions={{ style: { fontFamily: "Outfit, sans-serif", fontSize: "14px" } }} />
-      {view === "landing" && <Landing onNavigate={go} />}
+      {view === "landing" && <Suspense fallback={<div className="eb-stage min-h-screen" />}><Landing onNavigate={go} /></Suspense>}
       {view === "auth" && <Auth role={role} setRole={setRole} onBack={() => setView("landing")} />}
       {view === "admin" && session && profile?.role === "admin" && <AdminDashboard onLogout={() => void logout()} />}
       {view === "teacher" && session && profile?.role === "teacher" && <TeacherDashboard key={session.user.id} onLogout={() => void logout()} darkMode={darkMode} setDarkMode={setDarkMode} />}
