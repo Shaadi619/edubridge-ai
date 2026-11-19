@@ -83,6 +83,15 @@ const SCREENS = [
     height: 802,
     alt: "Show Your Work feedback. Step 5 holds up; step 6 needs another look because transformers don't read words one at a time. Beside it, page 14 of the Transformers slides is open with the matching line highlighted.",
   },
+  {
+    who: "For teachers",
+    title: "Start the day with who needs you",
+    body: "Who's stuck, in their own words, beside the slide that covers it, with a next step you can assign in one click. Anything spotted in uploaded work waits for you to agree before it goes on a record.",
+    src: "/landing/teacher-today.webp",
+    width: 1224,
+    height: 795,
+    alt: "The teacher's overview. A student wrote that transformers read words one at a time like an RNN. Beside it, page 11 of the Transformers slides is open with the line about self-attention highlighted, and below it a suggested next step with practice already assigned.",
+  },
 ];
 
 const STEPS: { who: string; steps: string[] }[] = [
@@ -195,10 +204,10 @@ export default function Landing({ onNavigate }: { onNavigate: (view: "auth", rol
         <div className="mx-auto flex max-w-6xl flex-col gap-14 px-6 py-20">
           <div className="flex max-w-[60ch] flex-col gap-3">
             <h2 id="screens" className="m-0 text-[32px] font-semibold leading-tight tracking-[-0.02em]">Screens from a real course</h2>
-            <p className="m-0 text-[17px] leading-relaxed text-[var(--eb-text-soft)]">A university course on transformers, built from the lecturer’s own slides. The feedback and the lit lines are exactly what EduBridge produced.</p>
+            <p className="m-0 text-[17px] leading-relaxed text-[var(--eb-text-soft)]">A university course on transformers, built from the lecturer’s own slides. The feedback and the lit lines are exactly what EduBridge produced; only the student’s name is changed.</p>
           </div>
           {SCREENS.map((screen, index) => (
-            <figure key={screen.src} className="m-0 grid items-center gap-8 lg:grid-cols-[minmax(0,1.5fr)_minmax(0,1fr)] lg:gap-14">
+            <figure key={screen.src} className={`m-0 grid items-center gap-8 lg:gap-14 ${index % 2 ? "lg:grid-cols-[minmax(0,1fr)_minmax(0,1.5fr)]" : "lg:grid-cols-[minmax(0,1.5fr)_minmax(0,1fr)]"}`}>
               <div className={`eb-shot ${index % 2 ? "lg:order-2" : ""}`}>
                 <img src={screen.src} width={screen.width} height={screen.height} alt={screen.alt} loading="lazy" decoding="async" className="block h-auto w-full" />
               </div>

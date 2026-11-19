@@ -67,3 +67,6 @@ Things to verify by hand before the redesign branch is merged. Tick each one off
 - Fixed: the upload quote showed doubled quotation marks.
 - Fixed: mistake titles like "sequential processing misconception" now read "Sequential processing".
 - Fixed: an agreed upload now counts as another time an existing mistake on the same idea showed up, instead of listing it twice. (The duplicate made during the checks is still there; mark one as dealt with.)
+- Fixed: the overview said "Everyone is on track today" above a student who had practice assigned. It now says how many students are working on practice you set.
+- Fixed: on a long page the lit line could sit below the visible part of the page; it now scrolls into view.
+- Slow: My Progress takes about 5 seconds to load for the test student.

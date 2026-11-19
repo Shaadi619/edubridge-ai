@@ -237,7 +237,8 @@ export default function TodayStage({ courseId, analytics, loading, accessToken, 
   const today = new Date().toLocaleDateString(undefined, { weekday: "long", day: "numeric", month: "long" });
   const headline = loading && !analytics
     ? "Loading today’s queue…"
-    : openStudents === 0 ? "Everyone is on track today"
+    : groups.length === 0 ? "Everyone is on track today"
+    : openStudents === 0 ? `${groups.length} student${groups.length === 1 ? " is" : "s are"} working on practice you set`
     : `${openStudents} student${openStudents === 1 ? " needs" : "s need"} you today`;
   const hasPassage = Boolean(selected && selected.citations.length > 0);
 
