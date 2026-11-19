@@ -35,6 +35,7 @@ const CheckDialog = lazy(() => import("./student/CheckDialog"));
 const WorkStage = lazy(() => import("./student/WorkStage"));
 const MaterialsStage = lazy(() => import("./teacher/MaterialsStage"));
 const AnalyticsStage = lazy(() => import("./teacher/AnalyticsStage"));
+const StudentsStage = lazy(() => import("./teacher/StudentsStage"));
 
 // ─── Types ────────────────────────────────────────────────────────────────
 
@@ -2107,7 +2108,7 @@ function TeacherDashboard({ onLogout, darkMode, setDarkMode }: { onLogout: () =>
                   }}
                 />
               ) : null}
-              {tab === "students" && selectedCourse && session && <TeacherStudents key={selectedCourse.id} searchQuery={searchQuery} courseId={selectedCourse.id} courseName={selectedCourse.name} accessToken={session.access_token} analytics={courseAnalytics} loading={analyticsLoading} focusedStudentId={activeFocus.studentId} focusedAttemptId={activeFocus.attemptId} focusKey={activeFocus.key} />}
+              {tab === "students" && selectedCourse && session && <Suspense fallback={<div role="status" className="eb-stage rounded-2xl px-8 py-8 text-sm text-[#A9B6C2]">Opening students…</div>}><StudentsStage key={selectedCourse.id} searchQuery={searchQuery} courseId={selectedCourse.id} courseName={selectedCourse.name} accessToken={session.access_token} analytics={courseAnalytics} loading={analyticsLoading} focusedStudentId={activeFocus.studentId} focusedAttemptId={activeFocus.attemptId} focusKey={activeFocus.key} /></Suspense>}
               {tab === "analytics" && selectedCourse && session && <Suspense fallback={<div role="status" className="eb-stage rounded-2xl px-8 py-8 text-sm text-[#A9B6C2]">Opening analytics…</div>}><AnalyticsStage key={selectedCourse.id} course={selectedCourse} analytics={courseAnalytics} loading={analyticsLoading} accessToken={session.access_token} focusedMisconceptionId={activeFocus.misconceptionId} focusKey={activeFocus.key} /></Suspense>}
               {tab === "materials" && selectedCourse && (
                 <Suspense fallback={<div role="status" className="eb-stage rounded-2xl px-8 py-8 text-sm text-[#A9B6C2]">Opening course material…</div>}>
@@ -2501,193 +2502,6 @@ function TeacherOverview({ requests, setRequests, onGoMaterials, announcements, 
       </AnimatePresence>
     </div>
   );
-}
-
-function TeacherStudents({ searchQuery = "", courseId, courseName, accessToken, analytics, loading, focusedStudentId, focusedAttemptId, focusKey }: {
-  searchQuery?: string;
-  courseId: string;
-  courseName: string;
-  accessToken: string;
-  analytics: Awaited<ReturnType<typeof api.teacherCourseAnalytics>> | null;
-  loading: boolean;
-  focusedStudentId?: string;
-  focusedAttemptId?: string;
-  focusKey: number;
-}) {
-  const [statusFilter, setStatusFilter] = useState("all");
-  const [statusMenuOpen, setStatusMenuOpen] = useState(false);
-  const [selectedStudentId, setSelectedStudentId] = useState<string | null>(null);
-  const students = (analytics?.students ?? []).map(student => ({ ...student, initials: initialsFor(student.name) }));
-
-  useEffect(() => {
-    if (focusedStudentId) setSelectedStudentId(focusedStudentId);
-  }, [focusKey, focusedStudentId]);
-
-  const filtered = students.filter(s => {
-    const matchesSearch = !searchQuery || s.name.toLowerCase().includes(searchQuery.toLowerCase());
-    const matchesStatus = statusFilter === "all" || s.status === statusFilter;
-    return matchesSearch && matchesStatus;
-  });
-
-  return (
-    <div>
-      <div className="mb-6 flex items-center justify-between flex-wrap gap-4">
-        <div>
-          <h1 className="font-display text-2xl text-primary">Students</h1>
-          <p className="text-sm text-muted-foreground mt-1 font-light">
-            {courseName} — {filtered.length} {searchQuery ? `matching "${searchQuery}"` : "enrolled"}
-          </p>
-        </div>
-        <div className="relative">
-          <button onClick={() => setStatusMenuOpen(open => !open)} aria-expanded={statusMenuOpen}
-            className={`min-w-40 flex items-center justify-between gap-3 text-sm border rounded-xl px-3 py-2 bg-card text-foreground shadow-sm transition-colors ${statusMenuOpen ? "border-accent ring-2 ring-accent/20" : "border-border hover:bg-muted/40"}`}>
-            <span>{statusFilter === "all" ? "All statuses" : statusFilter.charAt(0).toUpperCase() + statusFilter.slice(1)}</span>
-            <ChevronDown size={13} className={`text-muted-foreground transition-transform ${statusMenuOpen ? "rotate-180" : ""}`} />
-          </button>
-          <AnimatePresence>
-            {statusMenuOpen && (
-              <motion.div initial={{ opacity: 0, y: -6, scale: 0.98 }} animate={{ opacity: 1, y: 0, scale: 1 }} exit={{ opacity: 0, y: -6, scale: 0.98 }}
-                transition={{ duration: 0.15 }} className="absolute right-0 top-full mt-2 z-30 w-56 bg-card border border-border rounded-xl shadow-xl overflow-hidden p-1.5">
-                {[
-                  { value: "all", label: "All statuses", count: students.length },
-                  { value: "excelling", label: "Excelling", count: students.filter(student => student.status === "excelling").length },
-                  { value: "active", label: "Active", count: students.filter(student => student.status === "active").length },
-                  { value: "struggling", label: "Struggling", count: students.filter(student => student.status === "struggling").length },
-                ].map(option => {
-                  const selected = statusFilter === option.value;
-                  return <button key={option.value} onClick={() => { setStatusFilter(option.value); setStatusMenuOpen(false); }}
-                    className={`w-full flex items-center gap-3 px-3 py-2.5 rounded-lg text-left text-sm transition-colors ${selected ? "bg-primary text-primary-foreground" : "text-foreground hover:bg-muted"}`}>
-                    <span className="flex-1">{option.label}</span>
-                    <span className={`font-mono text-xs ${selected ? "text-primary-foreground/70" : "text-muted-foreground"}`}>{option.count}</span>
-                    {selected && <CheckCircle size={14} />}
-                  </button>;
-                })}
-              </motion.div>
-            )}
-          </AnimatePresence>
-        </div>
-      </div>
-      <div className="bg-card border border-border rounded-xl overflow-hidden shadow-sm">
-        <div className="overflow-x-auto">
-          <table className="w-full">
-            <thead>
-              <tr className="border-b border-border bg-muted/40">
-                {["Student", "Average Score", "Weak Topics", "Quizzes", "Status", ""].map(h => (
-                  <th key={h} className="text-left text-xs font-medium text-muted-foreground font-mono uppercase tracking-wide px-5 py-3">{h}</th>
-                ))}
-              </tr>
-            </thead>
-            <tbody>
-              {loading ? Array.from({ length: 4 }).map((_, i) => (
-                <tr key={i} className="border-b border-border last:border-0">
-                  <td className="px-5 py-4"><div className="flex items-center gap-3"><Skeleton className="w-8 h-8 rounded-full" /><Skeleton className="w-28 h-3" /></div></td>
-                  <td className="px-5 py-4"><Skeleton className="w-28 h-2 rounded-full" /></td>
-                  <td className="px-5 py-4"><Skeleton className="w-36 h-5 rounded-full" /></td>
-                  <td className="px-5 py-4"><Skeleton className="w-6 h-3" /></td>
-                  <td className="px-5 py-4"><Skeleton className="w-16 h-5 rounded-full" /></td>
-                </tr>
-              )) : filtered.length === 0 ? (
-                <tr><td colSpan={6} className="px-5 py-14 text-center">
-                  <div className="flex flex-col items-center gap-2">
-                    <Users size={32} className="text-muted-foreground/30" />
-                    <p className="text-sm font-medium text-foreground">{searchQuery ? `No students matching "${searchQuery}"` : "No students yet"}</p>
-                    <p className="text-xs text-muted-foreground font-light">{searchQuery ? "Try a different search term." : "Share your class code with students to get started."}</p>
-                  </div>
-                </td></tr>
-              ) : filtered.map(s => (
-                <tr key={s.id} className="border-b border-border last:border-0 hover:bg-muted/30 transition-colors">
-                  <td className="px-5 py-4">
-                    <div className="flex items-center gap-3">
-                      <div className="w-8 h-8 rounded-full bg-primary/10 text-primary flex items-center justify-center text-xs font-bold shrink-0">{s.initials}</div>
-                      <div><span className="text-sm font-medium text-foreground">{s.name}</span>{s.overdue_tasks > 0 && <div className="text-[10px] text-amber-700 mt-0.5">{s.overdue_tasks} overdue study {s.overdue_tasks === 1 ? "task" : "tasks"}</div>}</div>
-                    </div>
-                  </td>
-                  <td className="px-5 py-4">
-                    <div className="flex items-center gap-3">
-                      <div className="w-20 h-1.5 bg-muted rounded-full overflow-hidden">
-                        <motion.div className={`h-full rounded-full ${barColor(s.progress)}`}
-                          initial={{ width: 0 }} animate={{ width: `${s.progress}%` }}
-                          transition={{ duration: 0.7, ease: "easeOut" }} />
-                      </div>
-                      <span className="font-mono text-xs text-muted-foreground tabular-nums">{s.progress}%</span>
-                    </div>
-                  </td>
-                  <td className="px-5 py-4">
-                    <div className="flex flex-wrap gap-1">
-                      {s.weak.length === 0
-                        ? <span className="text-xs text-muted-foreground font-light">None identified</span>
-                        : s.weak.map(w => <span key={w} className="text-xs bg-red-50 text-red-700 border border-red-100 px-2 py-0.5 rounded-full">{w}</span>)
-                      }
-                    </div>
-                  </td>
-                  <td className="px-5 py-4 font-mono text-sm text-muted-foreground tabular-nums">{s.quizzes}</td>
-                  <td className="px-5 py-4">
-                    <span className={`text-xs font-medium px-2 py-0.5 rounded-full border capitalize ${statusStyle(s.status)}`}>{s.status}</span>
-                  </td>
-                  <td className="px-5 py-4 text-right">
-                    <button onClick={() => setSelectedStudentId(s.id)} className="text-xs font-medium text-primary border border-border rounded-lg px-3 py-1.5 hover:bg-muted transition-colors">View</button>
-                  </td>
-                </tr>
-              ))}
-            </tbody>
-          </table>
-        </div>
-      </div>
-      <LiveStudentDrawer courseId={courseId} courseName={courseName} studentId={selectedStudentId} accessToken={accessToken} focusedAttemptId={focusedAttemptId} focusKey={focusKey} onClose={() => setSelectedStudentId(null)} />
-    </div>
-  );
-}
-
-function LiveStudentDrawer({ courseId, courseName, studentId, accessToken, focusedAttemptId, focusKey, onClose }: {
-  courseId: string; courseName: string; studentId: string | null; accessToken: string; focusedAttemptId?: string; focusKey: number; onClose: () => void;
-}) {
-  const loadDetail = useCallback(
-    (signal: AbortSignal) => api.teacherStudentProgress(courseId, studentId!, accessToken, signal),
-    [courseId, studentId, accessToken],
-  );
-  const { data: detail, loading } = useScopedQuery(
-    studentId ? `${courseId}:${studentId}` : null, loadDetail, "Could not load student progress.",
-  );
-
-  useEffect(() => {
-    if (!detail || !focusedAttemptId) return;
-    const timer = window.setTimeout(() => document.getElementById(`attempt-${focusedAttemptId}`)?.scrollIntoView({ behavior: "smooth", block: "center" }), 100);
-    return () => window.clearTimeout(timer);
-  }, [detail, focusKey, focusedAttemptId]);
-
-  if (!studentId) return null;
-  return <AnimatePresence><>
-    <motion.div initial={{ opacity: 0 }} animate={{ opacity: 1 }} exit={{ opacity: 0 }} className="fixed inset-0 z-40 bg-black/30" onClick={onClose} />
-    <motion.aside initial={{ x: "100%" }} animate={{ x: 0 }} exit={{ x: "100%" }} transition={{ type: "spring", damping: 28, stiffness: 260 }}
-      className="fixed inset-y-0 right-0 z-50 w-full max-w-xl bg-background border-l border-border shadow-2xl flex flex-col">
-      <div className="px-6 py-5 border-b border-border bg-card flex items-center gap-3">
-        <div className="w-10 h-10 rounded-full bg-primary/10 text-primary flex items-center justify-center text-sm font-bold">{initialsFor(detail?.name)}</div>
-        <div className="flex-1"><h2 className="font-display text-xl text-primary">{detail?.name ?? "Student progress"}</h2><p className="text-xs text-muted-foreground">{courseName}</p></div>
-        <button onClick={onClose} className="p-2 hover:bg-muted rounded-lg text-muted-foreground"><X size={16} /></button>
-      </div>
-      <div className="flex-1 overflow-y-auto p-6">
-        {loading || !detail ? <div className="flex items-center gap-3 text-sm text-muted-foreground"><TypingIndicator />Loading progress…</div> : <>
-          <div className="grid grid-cols-3 gap-3 mb-6">
-            {[{ label: "Average", value: `${detail.average_score}%` }, { label: "Quizzes", value: String(detail.quiz_count) }, { label: "Weak topics", value: String(detail.weak_topics.length) }].map(item => <div key={item.label} className="bg-card border border-border rounded-xl p-4 text-center"><div className="font-display text-2xl text-primary">{item.value}</div><div className="text-xs text-muted-foreground mt-1">{item.label}</div></div>)}
-          </div>
-          <div className="bg-card border border-border rounded-xl p-5 mb-5">
-            <h3 className="font-semibold text-foreground mb-4">Topic performance</h3>
-            {detail.topic_scores.length ? <div className="space-y-3">{detail.topic_scores.map(topic => <div key={topic.topic}><div className="flex justify-between text-xs mb-1.5"><span className="font-medium">{topic.topic}</span><span className="font-mono text-muted-foreground">{topic.score}%</span></div><div className="h-1.5 bg-muted rounded-full overflow-hidden"><div className={`h-full ${barColor(topic.score)}`} style={{ width: `${topic.score}%` }} /></div></div>)}</div> : <p className="text-sm text-muted-foreground">No answered quiz questions yet.</p>}
-          </div>
-          <div className="bg-card border border-border rounded-xl overflow-hidden mb-5">
-            <h3 className="font-semibold text-foreground px-5 py-4 border-b border-border">Quiz attempts</h3>
-            {detail.attempts.map(attempt => <div id={`attempt-${attempt.id}`} key={attempt.id} className={`flex items-center gap-3 px-5 py-3.5 border-b border-border last:border-0 ${attempt.id === focusedAttemptId ? "bg-amber-50 ring-2 ring-inset ring-amber-300" : ""}`}><div className={`w-9 h-9 rounded-lg flex items-center justify-center text-xs font-bold ${attempt.score >= 70 ? "bg-emerald-50 text-emerald-700" : "bg-red-50 text-red-700"}`}>{attempt.score}%</div><div className="flex-1 min-w-0"><div className="text-sm font-medium truncate">{attempt.title}</div><div className="text-xs text-muted-foreground">{attempt.correct}/{attempt.total} correct</div></div><span className="text-xs font-mono text-muted-foreground">{new Date(attempt.completed_at).toLocaleDateString(undefined, { month: "short", day: "numeric" })}</span></div>)}
-            {!detail.attempts.length && <p className="p-5 text-sm text-muted-foreground">No completed attempts.</p>}
-          </div>
-          <div className="bg-card border border-border rounded-xl overflow-hidden">
-            <h3 className="font-semibold text-foreground px-5 py-4 border-b border-border">Misconceptions</h3>
-            {detail.misconceptions.map(item => <div key={item.id} className="px-5 py-4 border-b border-border last:border-0"><div className="flex items-center gap-2 mb-1"><span className="text-xs font-semibold text-primary">{item.concept}</span><span className={`text-[10px] px-2 py-0.5 rounded-full ${item.status === "open" ? "bg-amber-50 text-amber-700" : "bg-emerald-50 text-emerald-700"}`}>{item.status}</span></div><p className="text-xs text-muted-foreground leading-relaxed">{item.explanation}</p></div>)}
-            {!detail.misconceptions.length && <p className="p-5 text-sm text-muted-foreground">No misconceptions recorded.</p>}
-          </div>
-        </>}
-      </div>
-    </motion.aside>
-  </></AnimatePresence>;
 }
 
 // ─── Student Dashboard ────────────────────────────────────────────────────
