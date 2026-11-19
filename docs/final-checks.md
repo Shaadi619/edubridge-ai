@@ -19,16 +19,25 @@ Things to verify by hand before the redesign branch is merged. Tick each one off
 
 ## Teacher Overview
 
-- [ ] "Draft a message with AI" opens the follow-up dialog (uses AI tokens): the draft loads, fields are editable, Escape and Close work, "Send to …" assigns it and the student sees the message.
+- [x] (19 Nov, teacher side; student still to confirm the message arrives) "Draft a message with AI" opens the follow-up dialog (uses AI tokens): the draft loads, fields are editable, Escape and Close work, "Send to …" assigns it and the student sees the message.
 - [ ] A student entering the join code appears under "waiting to join"; "Let in" and "Turn down" both work.
 - [ ] A Show Your Work upload with a confident, course-backed misconception appears under "uploads to check"; "Agree, add to their record" and "Not a problem" both work.
 - [ ] Post an announcement (with and without "Keep it at the top") and delete it; students see it.
-- [ ] "Copy" copies the join code.
+- [x] (19 Nov) "Copy" copies the join code.
 
 ## Sign-in, settings and brand
 
 - [ ] Student: Join Course finds a course by code, "Ask to join" sends a request, "Cancel request" works, and a code that doesn't exist shows the "No course has that code" message.
 - [ ] Student Settings: edit and save the profile, change quiz difficulty, flip both switches, and check each change survives a reload.
-- [ ] Teacher Settings: "Suggest topics" (uses AI tokens) shows topics and an order with ticks; "Keep the ticked ones" saves them; adding a topic, saving an order and removing it all work.
+- [x] (19 Nov; "Keep the ticked ones" and adding a topic not tried, to leave your topics unchanged) Teacher Settings: "Suggest topics" (uses AI tokens) shows topics and an order with ticks; "Keep the ticked ones" saves them; adding a topic, saving an order and removing it all work.
 - [ ] Sign up a new teacher and a new student end to end (sign-up, email confirmation if enabled, the "waiting for approval" screen, admin approval).
-- [ ] The favicon and phone home-screen icon show the uB monogram.
+- [x] (19 Nov, page source; phone icon not seen on a phone) The favicon and phone home-screen icon show the uB monogram.
+
+## Found during the checks (19 November)
+
+- Fixed: teacher pages reset to "Loading courses…" when the tab regained focus.
+- Fixed: AI follow-up drafts showed internal IDs and jargon, and couldn't be stopped while loading.
+- Fixed: topic-suggestion summary was jargon and cut off.
+- Fixed: "Your courses" showed "0 students" for other courses.
+- Not built yet: there is no way to remove a topic once added.
+- Slow: an AI follow-up draft takes about 30 to 40 seconds; topic suggestions about a minute.
