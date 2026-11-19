@@ -6,11 +6,11 @@ from typing import Literal
 from uuid import UUID
 
 import httpx
-from fastapi import APIRouter, Depends, HTTPException
+from fastapi import APIRouter, BackgroundTasks, Depends, HTTPException
 from pydantic import BaseModel, Field
 
 from app.ai.azure_provider import AzureOpenAIProvider
-from app.ai.contracts import EvidenceChunk
+from app.ai.contracts import EvidenceChunk, QuizQuestion, QuizResult
 from app.ai.embeddings import embedding_client
 from app.ai.quiz_verification import QuizVerificationError, generate_verified_quiz, shuffle_verified_quiz
 from app.auth import AuthenticatedUser, current_user
@@ -1033,6 +1033,345 @@ async def teacher_student_progress(
         }
 
 
+async def _write_quiz(
+    client: httpx.AsyncClient, base: str, headers: dict, settings: Settings,
+    course_id_string: str, user_id: str, focus_concept: str, question_count: int,
+) -> dict:
+    """Pick course evidence for this student and write a verified, shuffled quiz from it."""
+    configured = embedding_client(settings)
+    if not configured:
+        raise HTTPException(status_code=503, detail="Semantic retrieval is not configured")
+    preference_response = await client.get(
+        f"{base}/rest/v1/user_preferences", headers=headers,
+        params={"user_id": f"eq.{user_id}", "select": "preferences", "limit": "1"},
+    )
+    preference_response.raise_for_status()
+    stored_preferences = preference_response.json()[0].get("preferences", {}) if preference_response.json() else {}
+    difficulty_mode = stored_preferences.get("difficulty", "adaptive") if isinstance(stored_preferences, dict) else "adaptive"
+    if difficulty_mode not in {"easy", "adaptive", "hard"}:
+        difficulty_mode = "adaptive"
+    misconception_response = await client.get(
+        f"{base}/rest/v1/misconceptions", headers=headers,
+        params={"course_id": f"eq.{course_id_string}", "student_id": f"eq.{user_id}", "status": "eq.open", "select": "concept", "order": "confidence.desc", "limit": "3"},
+    )
+    misconception_response.raise_for_status()
+    focus_concept = focus_concept.strip()
+    misconception_rows = misconception_response.json()
+    graph_focus_concept = focus_concept or (misconception_rows[0]["concept"] if misconception_rows else "")
+    prerequisite_concepts: list[str] = []
+    if graph_focus_concept:
+        topics_response = await client.get(
+            f"{base}/rest/v1/course_topics", headers=headers,
+            params={"course_id": f"eq.{course_id_string}", "select": "id,name"},
+        )
+        topics_response.raise_for_status()
+        if topics_response.json():
+            prerequisite_response = await client.get(
+                f"{base}/rest/v1/course_topic_prerequisites", headers=headers,
+                params={"course_id": f"eq.{course_id_string}", "select": "topic_id,prerequisite_topic_id"},
+            )
+            if prerequisite_response.is_success:
+                prerequisite_concepts = _prerequisite_concepts(
+                    graph_focus_concept, topics_response.json(), prerequisite_response.json(),
+                )
+    weak_concepts = list(dict.fromkeys([
+        *prerequisite_concepts,
+        *([focus_concept] if focus_concept else []),
+        *(row["concept"] for row in misconception_rows),
+    ]))[:3]
+    embedding_api, embedding_model = configured
+    query = (
+        f"formative practice for weak concepts: {', '.join(weak_concepts)}"
+        if weak_concepts
+        else "important concepts, definitions, mechanisms, comparisons, and applications for a formative quiz"
+    )
+    vector = (await embedding_api.embeddings.create(model=embedding_model, input=query, encoding_format="float")).data[0].embedding
+    matches_response = await client.post(
+        f"{base}/rest/v1/rpc/match_course_material_chunks", headers=headers,
+        json={"query_embedding": vector, "target_course_id": course_id_string, "match_count": 6},
+    )
+    matches_response.raise_for_status()
+    matches = matches_response.json()
+    if not matches:
+        raise HTTPException(status_code=422, detail="No indexed course material is available for a quiz")
+    evidence = [EvidenceChunk(
+        chunk_id=row["chunk_id"], document_id=row["material_id"], document_title=row["material_title"],
+        page_number=row["page_number"], content=row["content"],
+    ) for row in matches]
+    provider = AzureOpenAIProvider(
+        endpoint=settings.azure_openai_endpoint, api_key=settings.azure_openai_api_key,
+        api_version=settings.azure_openai_api_version,
+        fast_deployment=settings.azure_openai_tier1_deployment,
+        reasoning_deployment=settings.azure_openai_tier2_deployment,
+    )
+    try:
+        result = await generate_verified_quiz(
+            provider, evidence,
+            question_count=question_count,
+            difficulty_mode=difficulty_mode,
+            difficulty_instruction=_difficulty_instruction(difficulty_mode),
+            focus_concept=graph_focus_concept or None,
+            prerequisite_concepts=prerequisite_concepts,
+            priority_concepts=weak_concepts,
+        )
+    except QuizVerificationError as error:
+        raise HTTPException(status_code=502, detail=str(error)) from error
+    result = shuffle_verified_quiz(result)
+    return {
+        "result": result, "difficulty_mode": difficulty_mode,
+        "focus_concept": graph_focus_concept or None, "prerequisite_concepts": prerequisite_concepts,
+        "target_concepts": list(dict.fromkeys([*([focus_concept] if focus_concept else []), *(q.concept for q in result.questions)])),
+    }
+
+
+QUIZ_QUESTION_COUNT = 4
+WAITING_MAX_AGE = timedelta(hours=48)
+PREPARING_MAX_AGE = timedelta(minutes=10)
+
+
+def _quiz_headers(settings: Settings) -> tuple[str, dict]:
+    key = settings.supabase_service_role_key
+    return settings.supabase_url.rstrip("/"), {
+        "apikey": key, "Authorization": f"Bearer {key}", "Content-Type": "application/json", "Prefer": "return=representation",
+    }
+
+
+def _quiz_ai_configured(settings: Settings) -> bool:
+    return bool(
+        embedding_client(settings)
+        and settings.azure_openai_endpoint and settings.azure_openai_api_key and settings.azure_openai_tier2_deployment
+    )
+
+
+async def _insert_rows(client: httpx.AsyncClient, url: str, headers: dict, rows: list[dict], optional: set[str]) -> list[dict]:
+    """Insert rows; if a column from a newer migration is missing, retry without the optional ones."""
+    response = await client.post(url, headers=headers, json=rows)
+    if response.status_code == 400 and optional:
+        response = await client.post(url, headers=headers, json=[
+            {key: value for key, value in row.items() if key not in optional} for row in rows
+        ])
+    response.raise_for_status()
+    return response.json()
+
+
+def _citations(question: QuizQuestion) -> list[QuizCitation]:
+    return [QuizCitation(
+        chunk_id=citation.chunk_id,
+        document_title=citation.document_title, page_number=citation.page_number,
+        source_kind=_source_kind(citation.document_title, citation.page_number),
+        quote=question._evidence_quotes.get(citation.chunk_id),
+    ) for citation in question.citations]
+
+
+async def _store_quiz(
+    client: httpx.AsyncClient, base: str, headers: dict, written: dict, *, quiz_id: str | None = None,
+    course_id: str | None = None, student_id: str | None = None,
+) -> tuple[dict, list[dict]]:
+    """Save a written quiz: a new quiz row, or fill in a placeholder row (quiz_id)."""
+    result: QuizResult = written["result"]
+    details = {
+        "title": result.title, "target_concepts": written["target_concepts"],
+        "difficulty_mode": written["difficulty_mode"], "focus_concept": written["focus_concept"],
+        "prerequisite_concepts": written["prerequisite_concepts"],
+    }
+    optional = {"difficulty_mode", "focus_concept", "prerequisite_concepts", "citations"}
+    if quiz_id is None:
+        quiz = (await _insert_rows(client, f"{base}/rest/v1/quizzes", headers, [
+            {"course_id": course_id, "student_id": student_id, "created_by": "ai", **details},
+        ], optional))[0]
+    else:
+        quiz = {"id": quiz_id, **details}
+    questions = await _insert_rows(client, f"{base}/rest/v1/quiz_questions", headers, [{
+        "quiz_id": quiz["id"], "position": index, "prompt": question.prompt, "options": question.options,
+        "correct_option": question.correct_option, "explanation": question.explanation,
+        "concept": question.concept, "difficulty": question.difficulty,
+        "citations": [citation.model_dump() for citation in _citations(question)],
+    } for index, question in enumerate(result.questions)], optional)
+    return quiz, sorted(questions, key=lambda row: row["position"])
+
+
+def _generated_quiz(quiz: dict, questions: list[dict]) -> GeneratedQuiz:
+    mode = quiz.get("difficulty_mode")
+    return GeneratedQuiz(
+        id=quiz["id"], title=quiz["title"],
+        difficulty_mode=mode if mode in {"easy", "adaptive", "hard"} else "adaptive",
+        focus_concept=quiz.get("focus_concept"), prerequisite_concepts=quiz.get("prerequisite_concepts") or [],
+        questions=[GeneratedQuestion(
+            id=row["id"], prompt=row["prompt"], options=row["options"], correct_option=row["correct_option"],
+            explanation=row["explanation"], concept=row["concept"], difficulty=row["difficulty"],
+            citations=[QuizCitation(**citation) for citation in (row.get("citations") or [])],
+        ) for row in questions],
+    )
+
+
+async def _difficulty_preference(client: httpx.AsyncClient, base: str, headers: dict, user_id: str) -> str:
+    response = await client.get(
+        f"{base}/rest/v1/user_preferences", headers=headers,
+        params={"user_id": f"eq.{user_id}", "select": "preferences", "limit": "1"},
+    )
+    response.raise_for_status()
+    stored = response.json()[0].get("preferences", {}) if response.json() else {}
+    mode = stored.get("difficulty", "adaptive") if isinstance(stored, dict) else "adaptive"
+    return mode if mode in {"easy", "adaptive", "hard"} else "adaptive"
+
+
+async def _waiting_quiz(client: httpx.AsyncClient, base: str, headers: dict, course_id: str, user_id: str) -> dict | None:
+    """The student's waiting or preparing quiz, after throwing away one that has gone stale."""
+    response = await client.get(
+        f"{base}/rest/v1/quizzes", headers=headers,
+        params={
+            "course_id": f"eq.{course_id}", "student_id": f"eq.{user_id}", "prepared_state": "not.is.null",
+            "select": "id,title,prepared_state,difficulty_mode,focus_concept,prerequisite_concepts,created_at", "limit": "1",
+        },
+    )
+    if response.status_code == 400:
+        return None  # The waiting-quiz migration hasn't been applied yet.
+    response.raise_for_status()
+    rows = response.json()
+    if not rows:
+        return None
+    row = rows[0]
+    age = datetime.now(UTC) - datetime.fromisoformat(row["created_at"].replace("Z", "+00:00"))
+    stale = False
+    if row["prepared_state"] == "preparing":
+        stale = age > PREPARING_MAX_AGE  # The writer died (for example, the API restarted).
+    else:
+        newer_material = await client.get(
+            f"{base}/rest/v1/materials", headers=headers,
+            params={"course_id": f"eq.{course_id}", "status": "eq.ready", "created_at": f"gt.{row['created_at']}", "select": "id", "limit": "1"},
+        )
+        newer_material.raise_for_status()
+        stale = (
+            age > WAITING_MAX_AGE
+            or bool(newer_material.json())
+            or row.get("difficulty_mode") != await _difficulty_preference(client, base, headers, user_id)
+        )
+        if not stale:
+            questions = await client.get(
+                f"{base}/rest/v1/quiz_questions", headers=headers,
+                params={"quiz_id": f"eq.{row['id']}", "select": "citations"},
+            )
+            questions.raise_for_status()
+            cited = {citation["chunk_id"] for question in questions.json() for citation in question.get("citations") or []}
+            if cited:
+                still_there = await client.get(
+                    f"{base}/rest/v1/material_chunks", headers=headers,
+                    params={"id": f"in.({','.join(cited)})", "select": "id"},
+                )
+                still_there.raise_for_status()
+                stale = len(still_there.json()) < len(cited)  # Material it quoted was removed.
+    if stale:
+        await client.delete(f"{base}/rest/v1/quizzes", headers=headers, params={"id": f"eq.{row['id']}"})
+        return None
+    return row
+
+
+async def _claim_waiting_slot(client: httpx.AsyncClient, base: str, headers: dict, course_id: str, user_id: str) -> str | None:
+    """Reserve the student's single waiting-quiz slot. None if it is already taken."""
+    response = await client.post(f"{base}/rest/v1/quizzes", headers=headers, json={
+        "course_id": course_id, "student_id": user_id, "title": "Practice quiz", "created_by": "ai",
+        "prepared_state": "preparing",
+    })
+    if response.status_code in (400, 409):
+        return None  # Another request holds the slot, or the migration isn't applied.
+    response.raise_for_status()
+    return response.json()[0]["id"]
+
+
+async def _fill_waiting_quiz(settings: Settings, course_id: str, user_id: str, quiz_id: str) -> None:
+    """Background task: write the quiz for a reserved slot, then mark it waiting."""
+    base, headers = _quiz_headers(settings)
+    async with httpx.AsyncClient(timeout=60) as client:
+        try:
+            written = await _write_quiz(client, base, headers, settings, course_id, user_id, "", QUIZ_QUESTION_COUNT)
+            quiz, _ = await _store_quiz(client, base, headers, written, quiz_id=quiz_id)
+            updated = await client.patch(
+                f"{base}/rest/v1/quizzes", headers=headers,
+                params={"id": f"eq.{quiz_id}", "prepared_state": "eq.preparing"},
+                json={key: quiz[key] for key in ("title", "target_concepts", "difficulty_mode", "focus_concept", "prerequisite_concepts")}
+                | {"prepared_state": "waiting"},
+            )
+            updated.raise_for_status()
+            logger.info("Waiting quiz %s ready for student %s", quiz_id, user_id)
+        except Exception:
+            logger.exception("Could not prepare a waiting quiz for student %s", user_id)
+            await client.delete(f"{base}/rest/v1/quizzes", headers=headers, params={"id": f"eq.{quiz_id}"})
+
+
+async def _start_waiting_quiz(
+    client: httpx.AsyncClient, base: str, headers: dict, settings: Settings,
+    background: BackgroundTasks, course_id: str, user_id: str,
+) -> str:
+    """Start writing a waiting quiz. Returns "preparing", or "unavailable" if waiting quizzes can't be stored."""
+    slot = await _claim_waiting_slot(client, base, headers, course_id, user_id)
+    if slot:
+        background.add_task(_fill_waiting_quiz, settings, course_id, user_id, slot)
+        return "preparing"
+    # Either another request reserved the slot a moment ago, or the migration isn't applied.
+    return "preparing" if await _waiting_quiz(client, base, headers, course_id, user_id) else "unavailable"
+
+
+@router.post("/{course_id}/quizzes/prepare")
+async def prepare_quiz(
+    course_id: UUID,
+    background: BackgroundTasks,
+    user: AuthenticatedUser = Depends(current_user),
+    settings: Settings = Depends(get_settings),
+) -> dict:
+    """Make sure one quiz is waiting for this student. Writes at most one, in the background."""
+    if not _quiz_ai_configured(settings):
+        return {"state": "unavailable"}
+    base, headers = _quiz_headers(settings)
+    course_id_string = str(course_id)
+    async with httpx.AsyncClient(timeout=30) as client:
+        if not await _course_access(client, base, headers, course_id_string, user.id):
+            raise HTTPException(status_code=403, detail="You are not an approved member of this course")
+        existing = await _waiting_quiz(client, base, headers, course_id_string, user.id)
+        if existing:
+            return {"state": existing["prepared_state"]}
+        return {"state": await _start_waiting_quiz(client, base, headers, settings, background, course_id_string, user.id)}
+
+
+@router.post("/{course_id}/quizzes/take-waiting")
+async def take_waiting_quiz(
+    course_id: UUID,
+    background: BackgroundTasks,
+    user: AuthenticatedUser = Depends(current_user),
+    settings: Settings = Depends(get_settings),
+) -> dict:
+    """Hand over the waiting quiz and start writing the next one.
+
+    Returns {"state": "preparing"} while it is still being written; the page asks again.
+    """
+    if not _quiz_ai_configured(settings):
+        raise HTTPException(status_code=503, detail="Quiz writing is not configured")
+    base, headers = _quiz_headers(settings)
+    course_id_string = str(course_id)
+    async with httpx.AsyncClient(timeout=30) as client:
+        if not await _course_access(client, base, headers, course_id_string, user.id):
+            raise HTTPException(status_code=403, detail="You are not an approved member of this course")
+        existing = await _waiting_quiz(client, base, headers, course_id_string, user.id)
+        if existing is None:
+            return {"state": await _start_waiting_quiz(client, base, headers, settings, background, course_id_string, user.id)}
+        if existing["prepared_state"] != "waiting":
+            return {"state": "preparing"}
+        handed = await client.patch(
+            f"{base}/rest/v1/quizzes", headers=headers,
+            params={"id": f"eq.{existing['id']}", "prepared_state": "eq.waiting"},
+            json={"prepared_state": None, "created_at": datetime.now(UTC).isoformat()},
+        )
+        handed.raise_for_status()
+        if not handed.json():
+            return {"state": "preparing"}  # Another tab took it a moment ago.
+        questions = await client.get(
+            f"{base}/rest/v1/quiz_questions", headers=headers,
+            params={"quiz_id": f"eq.{existing['id']}", "select": "id,position,prompt,options,correct_option,explanation,concept,difficulty,citations", "order": "position.asc"},
+        )
+        questions.raise_for_status()
+        await _start_waiting_quiz(client, base, headers, settings, background, course_id_string, user.id)
+    return {"state": "ready", "quiz": _generated_quiz(handed.json()[0], questions.json()).model_dump()}
+
+
 @router.post("/{course_id}/quizzes/generate", response_model=GeneratedQuiz)
 async def generate_quiz(
     course_id: UUID,
@@ -1052,116 +1391,20 @@ async def generate_quiz(
     async with httpx.AsyncClient(timeout=60) as client:
         if not await _course_access(client, base, headers, course_id_string, user.id):
             raise HTTPException(status_code=403, detail="You are not an approved member of this course")
-        preference_response = await client.get(
-            f"{base}/rest/v1/user_preferences", headers=headers,
-            params={"user_id": f"eq.{user.id}", "select": "preferences", "limit": "1"},
+        written = await _write_quiz(
+            client, base, headers, settings, course_id_string, user.id, request.focus_concept or "", request.question_count,
         )
-        preference_response.raise_for_status()
-        stored_preferences = preference_response.json()[0].get("preferences", {}) if preference_response.json() else {}
-        difficulty_mode = stored_preferences.get("difficulty", "adaptive") if isinstance(stored_preferences, dict) else "adaptive"
-        if difficulty_mode not in {"easy", "adaptive", "hard"}:
-            difficulty_mode = "adaptive"
-        misconception_response = await client.get(
-            f"{base}/rest/v1/misconceptions", headers=headers,
-            params={"course_id": f"eq.{course_id_string}", "student_id": f"eq.{user.id}", "status": "eq.open", "select": "concept", "order": "confidence.desc", "limit": "3"},
-        )
-        misconception_response.raise_for_status()
-        focus_concept = request.focus_concept.strip() if request.focus_concept else ""
-        misconception_rows = misconception_response.json()
-        graph_focus_concept = focus_concept or (misconception_rows[0]["concept"] if misconception_rows else "")
-        prerequisite_concepts: list[str] = []
-        if graph_focus_concept:
-            topics_response = await client.get(
-                f"{base}/rest/v1/course_topics", headers=headers,
-                params={"course_id": f"eq.{course_id_string}", "select": "id,name"},
-            )
-            topics_response.raise_for_status()
-            if topics_response.json():
-                prerequisite_response = await client.get(
-                    f"{base}/rest/v1/course_topic_prerequisites", headers=headers,
-                    params={"course_id": f"eq.{course_id_string}", "select": "topic_id,prerequisite_topic_id"},
-                )
-                if prerequisite_response.is_success:
-                    prerequisite_concepts = _prerequisite_concepts(
-                        graph_focus_concept, topics_response.json(), prerequisite_response.json(),
-                    )
-        weak_concepts = list(dict.fromkeys([
-            *prerequisite_concepts,
-            *([focus_concept] if focus_concept else []),
-            *(row["concept"] for row in misconception_rows),
-        ]))[:3]
-        embedding_api, embedding_model = configured
-        query = (
-            f"formative practice for weak concepts: {', '.join(weak_concepts)}"
-            if weak_concepts
-            else "important concepts, definitions, mechanisms, comparisons, and applications for a formative quiz"
-        )
-        vector = (await embedding_api.embeddings.create(model=embedding_model, input=query, encoding_format="float")).data[0].embedding
-        matches_response = await client.post(
-            f"{base}/rest/v1/rpc/match_course_material_chunks", headers=headers,
-            json={"query_embedding": vector, "target_course_id": course_id_string, "match_count": 6},
-        )
-        matches_response.raise_for_status()
-        matches = matches_response.json()
-        if not matches:
-            raise HTTPException(status_code=422, detail="No indexed course material is available for a quiz")
-        evidence = [EvidenceChunk(
-            chunk_id=row["chunk_id"], document_id=row["material_id"], document_title=row["material_title"],
-            page_number=row["page_number"], content=row["content"],
-        ) for row in matches]
-        provider = AzureOpenAIProvider(
-            endpoint=settings.azure_openai_endpoint, api_key=settings.azure_openai_api_key,
-            api_version=settings.azure_openai_api_version,
-            fast_deployment=settings.azure_openai_tier1_deployment,
-            reasoning_deployment=settings.azure_openai_tier2_deployment,
-        )
-        try:
-            result = await generate_verified_quiz(
-                provider, evidence,
-                question_count=request.question_count,
-                difficulty_mode=difficulty_mode,
-                difficulty_instruction=_difficulty_instruction(difficulty_mode),
-                focus_concept=graph_focus_concept or None,
-                prerequisite_concepts=prerequisite_concepts,
-                priority_concepts=weak_concepts,
-            )
-        except QuizVerificationError as error:
-            raise HTTPException(status_code=502, detail=str(error)) from error
-        result = shuffle_verified_quiz(result)
-
-        quiz_response = await client.post(
-            f"{base}/rest/v1/quizzes", headers=headers,
-            json={
-                "course_id": course_id_string, "student_id": user.id, "title": result.title,
-                "target_concepts": list(dict.fromkeys([*([focus_concept] if focus_concept else []), *(q.concept for q in result.questions)])),
-                "created_by": "ai",
-            },
-        )
-        quiz_response.raise_for_status()
-        quiz = quiz_response.json()[0]
-        questions_response = await client.post(
-            f"{base}/rest/v1/quiz_questions", headers=headers,
-            json=[{
-                "quiz_id": quiz["id"], "position": index, "prompt": question.prompt, "options": question.options,
-                "correct_option": question.correct_option, "explanation": question.explanation,
-                "concept": question.concept, "difficulty": question.difficulty,
-            } for index, question in enumerate(result.questions)],
-        )
-        questions_response.raise_for_status()
-        stored = sorted(questions_response.json(), key=lambda row: row["position"])
+        quiz, stored = await _store_quiz(client, base, headers, written, course_id=course_id_string, student_id=user.id)
+        result = written["result"]
         return GeneratedQuiz(
-            id=quiz["id"], title=result.title, difficulty_mode=difficulty_mode,
-            focus_concept=graph_focus_concept or None, prerequisite_concepts=prerequisite_concepts,
+            id=quiz["id"], title=result.title, difficulty_mode=written["difficulty_mode"],
+            focus_concept=written["focus_concept"], prerequisite_concepts=written["prerequisite_concepts"],
             questions=[GeneratedQuestion(
-            id=row["id"], prompt=question.prompt, options=question.options, correct_option=question.correct_option,
-            explanation=question.explanation, concept=question.concept, difficulty=question.difficulty,
-            citations=[QuizCitation(
-                chunk_id=c.chunk_id,
-                document_title=c.document_title, page_number=c.page_number,
-                source_kind=_source_kind(c.document_title, c.page_number),
-                quote=question._evidence_quotes.get(c.chunk_id),
-            ) for c in question.citations],
-        ) for row, question in zip(stored, result.questions, strict=True)])
+                id=row["id"], prompt=question.prompt, options=question.options, correct_option=question.correct_option,
+                explanation=question.explanation, concept=question.concept, difficulty=question.difficulty,
+                citations=_citations(question),
+            ) for row, question in zip(stored, result.questions, strict=True)],
+        )
 
 
 @router.post("/{course_id}/quizzes/{quiz_id}/submit")

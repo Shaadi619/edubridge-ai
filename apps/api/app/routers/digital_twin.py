@@ -330,10 +330,13 @@ async def course_digital_twin(
             f"{base}/rest/v1/course_topic_prerequisites", headers=headers,
             params={"course_id": f"eq.{course_id_string}", "select": "topic_id,prerequisite_topic_id"},
         )
+        quiz_params = {"course_id": f"eq.{course_id_string}", "select": "id,title", "limit": "1000"}
+        # Quizzes still waiting to be handed out aren't part of the course yet.
         quizzes_response = await client.get(
-            f"{base}/rest/v1/quizzes", headers=headers,
-            params={"course_id": f"eq.{course_id_string}", "select": "id,title", "limit": "1000"},
+            f"{base}/rest/v1/quizzes", headers=headers, params={**quiz_params, "prepared_state": "is.null"},
         )
+        if quizzes_response.status_code == 400:
+            quizzes_response = await client.get(f"{base}/rest/v1/quizzes", headers=headers, params=quiz_params)
         mastery_response = await client.get(
             f"{base}/rest/v1/student_concept_mastery", headers=headers,
             params={"course_id": f"eq.{course_id_string}", "select": "student_id,concept,mastery_score,total_answers,completed_teach_backs"},

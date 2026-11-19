@@ -1,13 +1,16 @@
-import { useLayoutEffect, useRef, useState, type ReactNode } from "react";
+import { useEffect, useLayoutEffect, useRef, useState, type ReactNode } from "react";
 import { toast } from "sonner";
 import { ArrowRight, Check, X } from "lucide-react";
 
-import { api } from "../../lib/api";
+import { api, type GeneratedQuiz as GeneratedQuizType } from "../../lib/api";
 import { readQuizDraft, writeQuizDraft } from "../../lib/studentSession";
 import { renderText } from "./renderText";
 import SourceStage, { type StageCitation } from "./SourceStage";
 
-type GeneratedQuiz = Awaited<ReturnType<typeof api.generateQuiz>>;
+type GeneratedQuiz = GeneratedQuizType;
+
+const WAIT_POLL_MS = 3000;
+const WAIT_LIMIT_MS = 180_000;
 
 const CONFIDENCE = [
   { value: 1, label: "Not sure" },
@@ -40,6 +43,32 @@ export default function QuizStage({ userId, courseId, courseName, accessToken, o
   const [replaceQuiz, setReplaceQuiz] = useState(false);
   const [activeSource, setActiveSource] = useState<string | null>(null);
   const submissionInFlight = useRef(false);
+  const alive = useRef(true);
+  // "waiting" means a quiz is already written for this student; "preparing" means it is being written.
+  const [waitingState, setWaitingState] = useState<"unknown" | "waiting" | "preparing" | "unavailable">("unknown");
+
+  useEffect(() => {
+    alive.current = true;
+    // Opening the course quietly makes sure one quiz is being written ahead of time.
+    api.prepareQuiz(courseId, accessToken)
+      .then(result => { if (alive.current) setWaitingState(result.state); })
+      .catch(() => { if (alive.current) setWaitingState("unavailable"); });
+    return () => { alive.current = false; };
+  }, [courseId, accessToken]);
+
+  /** Take the quiz written ahead of time, waiting for it if it is still being written. */
+  const takeWaitingQuiz = async (): Promise<GeneratedQuiz | null> => {
+    const deadline = Date.now() + WAIT_LIMIT_MS;
+    for (;;) {
+      const result = await api.takeWaitingQuiz(courseId, accessToken);
+      if (result.state === "ready") return result.quiz;
+      if (result.state === "unavailable") return null;
+      if (!alive.current) throw new Error("Stopped waiting for the quiz.");
+      setWaitingState("preparing");
+      if (Date.now() > deadline) throw new Error("This quiz is taking longer than usual. Try again in a moment.");
+      await new Promise(resolve => window.setTimeout(resolve, WAIT_POLL_MS));
+    }
+  };
 
   const loadQuiz = async (focusConcept?: string) => {
     if (generationInFlight.current) return;
@@ -47,7 +76,11 @@ export default function QuizStage({ userId, courseId, courseName, accessToken, o
     setLoading(true);
     setLoadError(null);
     try {
-      const generated = await api.generateQuiz(courseId, accessToken, focusConcept);
+      // A practice quiz on a chosen topic is written on demand; the everyday quiz is usually ready already.
+      const generated = (focusConcept ? null : await takeWaitingQuiz())
+        ?? await api.generateQuiz(courseId, accessToken, focusConcept);
+      if (!alive.current) return;
+      setWaitingState("preparing"); // Handing over a quiz starts writing the next one.
       setQuiz(generated);
       setAnswers(Array(generated.questions.length).fill(null));
       setConfidences(Array(generated.questions.length).fill(null));
@@ -61,10 +94,10 @@ export default function QuizStage({ userId, courseId, courseName, accessToken, o
       setActiveSource(null);
       if (focusConcept) onFocusConsumed();
     } catch (error) {
-      setLoadError(error instanceof Error ? error.message : "Could not generate a quiz.");
+      if (alive.current) setLoadError(error instanceof Error ? error.message : "The quiz couldn’t be written. Try again.");
     } finally {
       generationInFlight.current = false;
-      setLoading(false);
+      if (alive.current) setLoading(false);
     }
   };
 
@@ -83,7 +116,7 @@ export default function QuizStage({ userId, courseId, courseName, accessToken, o
 
   if (loading) return shell(
     <div role="status" className="mx-auto flex max-w-[640px] flex-col gap-3 pt-10">
-      <h2 className="m-0 text-[26px] font-semibold tracking-[-0.015em]">Writing questions from your course material</h2>
+      <h2 className="m-0 text-[26px] font-semibold tracking-[-0.015em]">{waitingState === "preparing" ? "Finishing the quiz being written for you" : "Writing questions from your course material"}</h2>
       <p className="m-0 text-[15px] text-[var(--eb-text-muted)]">Each answer is checked against an exact line in {courseName} before you see it.</p>
       <span aria-hidden="true" className="relative mt-2 block h-[3px] max-w-[360px] overflow-hidden rounded-sm bg-[var(--eb-line-soft)]">
         <span className="eb-seek absolute inset-y-0 w-2/5 bg-[linear-gradient(90deg,transparent,var(--eb-light),transparent)]" />
@@ -102,9 +135,15 @@ export default function QuizStage({ userId, courseId, courseName, accessToken, o
       {loadError && <p role="alert" className="m-0 rounded-xl border border-[rgba(232,144,127,0.4)] bg-[rgba(232,144,127,0.08)] px-4 py-3 text-[15px] text-[var(--eb-text)]">{loadError}</p>}
       <div className="flex flex-col items-start gap-2 pt-2">
         <button type="button" onClick={() => void loadQuiz(suggestedFocus ?? undefined)} className={primaryButton}>
-          {loadError ? "Try again" : suggestedFocus ? "Make a practice quiz" : "Make a quiz"}
+          {loadError ? "Try again" : suggestedFocus ? "Make a practice quiz" : waitingState === "waiting" ? "Start your quiz" : "Make a quiz"}
         </button>
-        <span className="text-[13px] text-[var(--eb-text-muted)]">Uses AI to write the questions. Your quiz stays open if you switch sections.</span>
+        <span className="text-[13px] text-[var(--eb-text-muted)]">
+          {!suggestedFocus && waitingState === "waiting"
+            ? "A quiz is ready for you. Your quiz stays open if you switch sections."
+            : !suggestedFocus && waitingState === "preparing"
+              ? "A quiz is being written for you in the background. Your quiz stays open if you switch sections."
+              : "Uses AI to write the questions. Your quiz stays open if you switch sections."}
+        </span>
       </div>
     </div>,
   );

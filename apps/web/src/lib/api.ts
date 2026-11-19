@@ -33,6 +33,24 @@ export type CourseGraphSuggestion = {
   }>;
 };
 
+export type GeneratedQuiz = {
+  id: string;
+  title: string;
+  difficulty_mode: "easy" | "adaptive" | "hard";
+  focus_concept: string | null;
+  prerequisite_concepts: string[];
+  questions: Array<{
+    id: string;
+    prompt: string;
+    options: string[];
+    correct_option: number;
+    explanation: string;
+    concept: string;
+    difficulty: number;
+    citations: SourceCitation[];
+  }>;
+};
+
 export type WorkAnalysis = {
   observed_work: string;
   summary: string;
@@ -280,23 +298,15 @@ export const api = {
       accessToken,
     ),
   generateQuiz: (courseId: string, accessToken: string, focusConcept?: string) =>
-    request<{
-      id: string;
-      title: string;
-      difficulty_mode: "easy" | "adaptive" | "hard";
-      focus_concept: string | null;
-      prerequisite_concepts: string[];
-      questions: Array<{
-        id: string;
-        prompt: string;
-        options: string[];
-        correct_option: number;
-        explanation: string;
-        concept: string;
-        difficulty: number;
-        citations: SourceCitation[];
-      }>;
-    }>(`/courses/${courseId}/quizzes/generate`, { method: "POST", body: JSON.stringify({ question_count: 4, focus_concept: focusConcept ?? null }) }, accessToken),
+    request<GeneratedQuiz>(`/courses/${courseId}/quizzes/generate`, { method: "POST", body: JSON.stringify({ question_count: 4, focus_concept: focusConcept ?? null }) }, accessToken),
+  /** Make sure one quiz is being written ahead of time for this course. */
+  prepareQuiz: (courseId: string, accessToken: string) =>
+    request<{ state: "waiting" | "preparing" | "unavailable" }>(`/courses/${courseId}/quizzes/prepare`, { method: "POST" }, accessToken),
+  /** Take the quiz written ahead of time; "preparing" means ask again shortly. */
+  takeWaitingQuiz: (courseId: string, accessToken: string) =>
+    request<{ state: "ready"; quiz: GeneratedQuiz } | { state: "preparing" | "unavailable" }>(
+      `/courses/${courseId}/quizzes/take-waiting`, { method: "POST" }, accessToken,
+    ),
   submitQuiz: (courseId: string, quizId: string, answers: Array<number | null>, confidences: Array<number | null>, accessToken: string) =>
     request<{ attempt_id: string; score: number; correct: number; total: number; assignment_completed: boolean; confidence_gaps: number }>(
       `/courses/${courseId}/quizzes/${quizId}/submit`,
