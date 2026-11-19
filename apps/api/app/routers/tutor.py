@@ -70,6 +70,13 @@ def _remove_internal_references(text: str) -> str:
     cleaned = re.sub(rf"\b(?:see\s+)?chunk\s+(?:{uuid}|[a-z0-9_-]{{6,}})\b", "the course material", cleaned, flags=re.IGNORECASE)
     cleaned = re.sub(r"\s*\[\s*\{.*?\"chunk_id\".*?\}\s*\]", "", cleaned, flags=re.IGNORECASE | re.DOTALL)
     cleaned = re.sub(r"\s*\[\s*S\d+(?:\s*,\s*S\d+)*\s*\]", "", cleaned, flags=re.IGNORECASE)
+    # Any bracket that names chunk IDs or holds a database ID, e.g. "[chunk_id: 822e…; chunk_id: 127a…]".
+    any_uuid = r"[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}"
+    cleaned = re.sub(rf"\s*[\[(][^\[\]()]*?(?:chunk[ _-]?ids?\b|{any_uuid})[^\[\]()]*[\])]", "", cleaned, flags=re.IGNORECASE)
+    cleaned = re.sub(rf"\s*\bchunk[ _-]?ids?\s*[:=]?\s*{any_uuid}", "", cleaned, flags=re.IGNORECASE)
+    cleaned = re.sub(rf"\s*{any_uuid}", "", cleaned, flags=re.IGNORECASE)
+    cleaned = re.sub(r"[ \t]+([.,;:!?])", r"\1", cleaned)
+    cleaned = re.sub(r"[ \t]{2,}", " ", cleaned)
     return cleaned.strip()
 
 

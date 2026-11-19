@@ -647,9 +647,11 @@ function TeacherDashboard({ onLogout, darkMode, setDarkMode }: { onLogout: () =>
     toast.success(enabled ? "Show Your Work is on for this course" : "Show Your Work is off for this course");
   };
 
+  const coursesLoadedOnce = useRef(false);
   const loadCourses = useCallback(async () => {
     if (!supabase || !user) return;
-    setCoursesLoading(true);
+    // Only the first load shows the loading screen; later refreshes update quietly.
+    if (!coursesLoadedOnce.current) setCoursesLoading(true);
     const query = (columns: string) => supabase!
       .from("courses")
       .select(columns)
@@ -666,6 +668,7 @@ function TeacherDashboard({ onLogout, darkMode, setDarkMode }: { onLogout: () =>
       toast.error(error.message);
       return;
     }
+    coursesLoadedOnce.current = true;
     const loaded = ((data ?? []) as unknown as CourseRow[]).map(courseFromRow);
     setCourses(loaded);
     setSelectedCourse(current => loaded.find(course => course.id === current?.id) ?? loaded[0] ?? null);
@@ -1061,7 +1064,9 @@ function TeacherOverview({ requests, setRequests, announcements, setAnnouncement
     }
   };
 
+  const draftRequest = useRef(0);
   const draftIntervention = async (item: InterventionQueueItem) => {
+    const request = ++draftRequest.current;
     setCopilotItem(item);
     setCopilotDraft(null);
     setCopilotDueDays(3);
@@ -1073,12 +1078,14 @@ function TeacherOverview({ requests, setRequests, announcements, setAnnouncement
         source: item.source,
         downstream_concept: item.downstream_concept,
       }, accessToken);
-      setCopilotDraft(draft);
+      // Ignore a draft that arrives after the teacher closed the dialog or opened another.
+      if (request === draftRequest.current) setCopilotDraft(draft);
     } catch (error) {
+      if (request !== draftRequest.current) return;
       setCopilotItem(null);
-      toast.error(error instanceof Error ? error.message : "Could not draft an intervention.");
+      toast.error(error instanceof Error ? error.message : "The follow-up couldn’t be written. Try again.");
     } finally {
-      setCopilotLoading(false);
+      if (request === draftRequest.current) setCopilotLoading(false);
     }
   };
 
@@ -1202,7 +1209,7 @@ function TeacherOverview({ requests, setRequests, announcements, setAnnouncement
             assigning={assigningIntervention === copilotItem.id}
             onDueDays={setCopilotDueDays}
             onChange={setCopilotDraft}
-            onClose={() => { if (!copilotLoading) { setCopilotItem(null); setCopilotDraft(null); } }}
+            onClose={() => { draftRequest.current += 1; setCopilotLoading(false); setCopilotItem(null); setCopilotDraft(null); }}
             onAssign={() => void assignCopilotDraft()}
           />
         </Suspense>

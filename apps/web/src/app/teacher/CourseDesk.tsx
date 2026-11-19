@@ -188,7 +188,7 @@ export default function CourseDesk({
                 <li key={item.id} className="flex items-baseline justify-between gap-3 border-b border-[var(--eb-line-soft)] py-2.5 last:border-0">
                   <span className={`truncate text-[15px] ${item.id === course.id ? "font-semibold" : "text-[var(--eb-text-soft)]"}`}>{item.name}</span>
                   <span className="shrink-0 text-sm text-[var(--eb-text-muted)]">
-                    {item.id === course.id && analytics ? plural(analytics.active_students, "student") : plural(item.students, "student")}, code {item.code}
+                    {item.id === course.id && analytics ? `${plural(analytics.active_students, "student")}, code ${item.code}` : `Code ${item.code}`}
                   </span>
                 </li>
               ))}

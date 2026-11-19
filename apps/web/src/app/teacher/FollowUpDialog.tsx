@@ -22,14 +22,14 @@ export default function FollowUpDialog({ item, draft, loading, dueDays, assignin
 
   useEffect(() => {
     panel.current?.focus();
-    const onKey = (event: KeyboardEvent) => { if (event.key === "Escape" && !loading) onClose(); };
+    const onKey = (event: KeyboardEvent) => { if (event.key === "Escape") onClose(); };
     window.addEventListener("keydown", onKey);
     return () => window.removeEventListener("keydown", onKey);
-  }, [loading, onClose]);
+  }, [onClose]);
 
   return (
     <div className="fixed inset-0 z-[80] flex items-center justify-center bg-[rgba(10,15,20,0.62)] p-4 backdrop-blur-sm"
-      onMouseDown={event => { if (event.target === event.currentTarget && !loading) onClose(); }}>
+      onMouseDown={event => { if (event.target === event.currentTarget) onClose(); }}>
       <div ref={panel} tabIndex={-1} role="dialog" aria-modal="true" aria-label={`Follow-up for ${item.student}`}
         className="eb-stage eb-rise flex max-h-[90vh] w-full max-w-2xl flex-col overflow-hidden rounded-2xl outline-none">
         <header className="flex items-start justify-between gap-4 border-b border-[var(--eb-line-soft)] px-6 py-5">
@@ -37,7 +37,7 @@ export default function FollowUpDialog({ item, draft, loading, dueDays, assignin
             <h2 className="m-0 text-[21px] font-semibold tracking-[-0.01em]">Plan a follow-up with {first}</h2>
             <p className="m-0 text-[15px] text-[var(--eb-text-soft)]">On {friendlyConcept(item.concept)}. Edit anything before you send it.</p>
           </div>
-          <button type="button" onClick={onClose} disabled={loading} className="min-h-10 rounded-lg px-3 text-sm text-[var(--eb-text-muted)] hover:text-[var(--eb-text)] disabled:opacity-40">Close</button>
+          <button type="button" onClick={onClose} className="min-h-10 rounded-lg px-3 text-sm text-[var(--eb-text-muted)] hover:text-[var(--eb-text)]">{loading ? "Stop" : "Close"}</button>
         </header>
 
         <div className="flex-1 overflow-y-auto px-6 py-6">
