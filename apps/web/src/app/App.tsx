@@ -596,6 +596,12 @@ function TeacherDashboard({ onLogout, darkMode, setDarkMode }: { onLogout: () =>
   const [uploadOpen, setUploadOpen] = useState(false);
   const [courseCreateOpen, setCourseCreateOpen] = useState(false);
   const [courseMenuOpen, setCourseMenuOpen] = useState(false);
+  useEffect(() => {
+    if (!courseMenuOpen) return;
+    const close = (event: KeyboardEvent) => { if (event.key === "Escape") setCourseMenuOpen(false); };
+    window.addEventListener("keydown", close);
+    return () => window.removeEventListener("keydown", close);
+  }, [courseMenuOpen]);
   const [notifOpen, setNotifOpen] = useState(false);
   const [searchQuery, setSearchQuery] = useState("");
   const [courses, setCourses] = useState<TeacherCourse[]>([]);

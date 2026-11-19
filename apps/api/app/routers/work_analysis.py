@@ -14,7 +14,7 @@ from pypdf import PdfReader
 
 from app.ai.azure_provider import AzureOpenAIProvider
 from app.ai.contracts import AITier, EvidenceChunk, EvidenceQuote, ShowWorkAnalysis
-from app.ai.evidence import normalize_whitespace
+from app.ai.evidence import find_quote
 from app.ai.embeddings import embedding_client
 from app.ai.prompts import SHOW_WORK_SYSTEM_PROMPT
 from app.auth import AuthenticatedUser, current_user
@@ -85,15 +85,14 @@ def _provider(settings: Settings) -> AzureOpenAIProvider:
 def _friendly_analysis(analysis: ShowWorkAnalysis, evidence: list[EvidenceChunk]) -> dict:
     """Keep only citations whose quote really appears in the cited course text."""
     canonical = {item.chunk_id: item for item in evidence}
-    content = {item.chunk_id: normalize_whitespace(item.content) for item in evidence}
 
     def citations(items: list[EvidenceQuote]) -> list[dict]:
         output: list[dict] = []
         seen: set[tuple[str, int | None]] = set()
         for reference in items:
             source = canonical.get(reference.chunk_id)
-            quote = normalize_whitespace(reference.quote)
-            if not source or not quote or quote not in content[source.chunk_id]:
+            quote = find_quote(reference.quote, source.content) if source else None
+            if not source or not quote:
                 continue
             location = (source.document_title, source.page_number)
             if location in seen:

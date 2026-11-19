@@ -14,7 +14,7 @@ from app.ai.contracts import (
     QuizResult,
     QuizVerificationResult,
 )
-from app.ai.evidence import normalize_whitespace, quoted_chunks
+from app.ai.evidence import find_quote, normalize_whitespace, quoted_chunks
 from app.ai.prompts import QUIZ_SYSTEM_PROMPT, QUIZ_VERIFICATION_SYSTEM_PROMPT
 from app.ai.provider import AIProvider
 
@@ -185,8 +185,10 @@ async def generate_verified_quiz(
                 cited = {citation.chunk_id for citation in citations}
                 quotes: dict[str, str] = {}
                 for reference in verdict.sources:
-                    quote = normalize_whitespace(reference.quote)
-                    if reference.chunk_id in cited and reference.chunk_id not in quotes and quote:
+                    if reference.chunk_id not in cited or reference.chunk_id in quotes:
+                        continue
+                    quote = find_quote(reference.quote, sources[reference.chunk_id].content)
+                    if quote:
                         quotes[reference.chunk_id] = quote
                 verified = question.model_copy(update={
                     "explanation": verdict.explanation.strip(),

@@ -11,7 +11,7 @@ from pydantic import BaseModel, Field
 from app.ai.azure_provider import AzureOpenAIProvider
 from app.ai.contracts import AITier, Citation, EvidenceChunk, TeachBackEvaluation, TeachBackQuestion
 from app.ai.embeddings import embedding_client
-from app.ai.evidence import normalize_whitespace, quoted_chunks
+from app.ai.evidence import find_quote, quoted_chunks
 from app.ai.prompts import RETENTION_QUESTION_SYSTEM_PROMPT, TEACH_BACK_EVALUATION_SYSTEM_PROMPT, TEACH_BACK_QUESTION_SYSTEM_PROMPT
 from app.auth import AuthenticatedUser, current_user
 from app.concepts import friendly_concept, group_concept_records
@@ -143,11 +143,13 @@ def _friendly(citations: list[Citation], quotes: dict[str, str] | None = None) -
 
 def _evidence_quotes(evaluation: TeachBackEvaluation, evidence: list[EvidenceChunk]) -> dict[str, str]:
     """The evaluator's quotes that really appear in the cited course text, keyed by chunk."""
-    content = {item.chunk_id: normalize_whitespace(item.content) for item in evidence}
+    content = {item.chunk_id: item.content for item in evidence}
     quotes: dict[str, str] = {}
     for reference in evaluation.sources:
-        quote = normalize_whitespace(reference.quote)
-        if quote and reference.chunk_id not in quotes and quote in content.get(reference.chunk_id, ""):
+        if reference.chunk_id in quotes or reference.chunk_id not in content:
+            continue
+        quote = find_quote(reference.quote, content[reference.chunk_id])
+        if quote:
             quotes[reference.chunk_id] = quote
     return quotes
 
