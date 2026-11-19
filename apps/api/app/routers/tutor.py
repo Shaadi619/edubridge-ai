@@ -1,7 +1,6 @@
 import json
 import logging
 import re
-from datetime import UTC, datetime
 from math import isfinite
 from time import perf_counter
 from typing import Literal
@@ -24,8 +23,6 @@ from app.ai.prompts import (
 from app.auth import AuthenticatedUser, current_user
 from app.concepts import friendly_concept
 from app.config import Settings, get_settings
-from app.mastery import change_misconception_evidence
-from app.routers.notifications import create_notification
 from app.routers.tutor_documents import (
     SUMMARY_PROMPT, SummaryUnavailable, load_pdf_summary_sources, parse_pdf_summary,
 )
@@ -292,65 +289,18 @@ async def _persist_misconception(
     profile.raise_for_status()
     if not profile.json():
         return
-    existing = await client.get(
-        f"{base}/rest/v1/misconceptions", headers=headers,
-        params={"course_id": f"eq.{course_id}", "student_id": f"eq.{student_id}", "status": "neq.dismissed", "select": "id,concept,label,occurrence_count,learning_status"},
+    # Pending observations are deliberately outside misconceptions and mastery.
+    # Replaying a message cannot overwrite a teacher's decision.
+    stored = await client.post(
+        f"{base}/rest/v1/tutor_flags",
+        headers={**headers, "Prefer": "resolution=ignore-duplicates,return=minimal"},
+        params={"on_conflict": "source_message_id"},
+        json={"source_message_id": source_message_id, "course_id": course_id,
+              "student_id": student_id, "concept": concept, "label": label,
+              "explanation": analysis.explanation, "student_evidence": evidence,
+              "confidence": analysis.confidence, "recommended_intervention": analysis.recommended_intervention},
     )
-    supports_count = existing.is_success
-    if not supports_count:
-        existing = await client.get(
-            f"{base}/rest/v1/misconceptions", headers=headers,
-            params={"course_id": f"eq.{course_id}", "student_id": f"eq.{student_id}", "status": "neq.dismissed", "select": "id,concept,label,learning_status"},
-        )
-    existing.raise_for_status()
-    match = next((row for row in existing.json() if _same_concept(row["concept"], concept) or _same_concept(row["label"], label)), None)
-    now = datetime.now(UTC).isoformat()
-    if match:
-        was_verified = match.get("learning_status") == "verified"
-        payload = {
-            "source_message_id": source_message_id,
-            "explanation": analysis.explanation,
-            "student_evidence": evidence,
-            "confidence": max(0, min(1, analysis.confidence)),
-            "recommended_intervention": analysis.recommended_intervention,
-            "status": "open",
-            "learning_status": "open",
-            "verified_at": None,
-            **({"occurrence_count": match.get("occurrence_count", 1) + 1, "last_detected_at": now} if supports_count else {}),
-        }
-        response = await client.patch(f"{base}/rest/v1/misconceptions?id=eq.{match['id']}", headers=headers, json=payload)
-        response.raise_for_status()
-        if was_verified:
-            await change_misconception_evidence(
-                client, base, headers,
-                course_id=course_id, student_id=student_id, concept=match["concept"], delta=1,
-            )
-        return
-    payload = {
-        "course_id": course_id, "student_id": student_id, "source_message_id": source_message_id,
-        "concept": concept, "label": label, "explanation": analysis.explanation,
-        "student_evidence": evidence, "confidence": analysis.confidence,
-        "recommended_intervention": analysis.recommended_intervention,
-        **({"occurrence_count": 1, "last_detected_at": now} if supports_count else {}),
-    }
-    response = await client.post(f"{base}/rest/v1/misconceptions", headers=headers, json=payload)
-    response.raise_for_status()
-    await change_misconception_evidence(
-        client, base, headers,
-        course_id=course_id, student_id=student_id, concept=concept, delta=1,
-    )
-    course = await client.get(
-        f"{base}/rest/v1/courses", headers=headers,
-        params={"id": f"eq.{course_id}", "select": "teacher_id,name"},
-    )
-    course.raise_for_status()
-    if course.json():
-        await create_notification(
-            client, base, headers, recipient_id=course.json()[0]["teacher_id"], course_id=course_id,
-            notification_type="misconception", title="New misconception detected",
-            body=f"A student may need help with {concept} in {course.json()[0]['name']}.",
-            metadata={"misconception_id": response.json()[0]["id"], "student_id": student_id},
-        )
+    stored.raise_for_status()
 
 
 class TutorQuery(BaseModel):

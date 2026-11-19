@@ -238,6 +238,12 @@ export const api = {
   ),
   workSubmissions: (courseId: string, accessToken: string) =>
     request<WorkSubmission[]>(`/courses/${courseId}/work-submissions`, undefined, accessToken),
+  teacherTutorFlags: (courseId: string, token: string, signal: AbortSignal) =>
+    request<Array<{source_message_id: string; student: string; concept: string; explanation: string; message: string}>>(
+      `/courses/teacher/${courseId}/tutor-flags`, {signal}, token),
+  reviewTutorFlag: (courseId: string, messageId: string, decision: "confirmed" | "dismissed", token: string, signal: AbortSignal) =>
+    request<{decision: "confirmed" | "dismissed"}>(`/courses/teacher/${courseId}/tutor-flags/${messageId}/review`,
+      {method: "PATCH", body: JSON.stringify({decision}), signal}, token),
   teacherWorkSubmissions: (courseId: string, accessToken: string) =>
     request<Array<WorkSubmission & { student_id: string; student: string }>>(
       `/courses/teacher/${courseId}/work-submissions`, undefined, accessToken,

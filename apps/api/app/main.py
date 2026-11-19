@@ -2,6 +2,7 @@ from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 
 from app.config import get_settings
+from app.routers import tutor_reviews
 from app.routers import announcements, course_graph, digital_twin, enrollments, health, interventions, materials, me, notifications, quizzes, search, study_plans, teachback, tutor, voice, work_analysis
 
 settings = get_settings()
@@ -28,6 +29,7 @@ app.include_router(me.router, prefix="/api/v1")
 app.include_router(materials.router, prefix="/api/v1")
 app.include_router(search.router, prefix="/api/v1")
 app.include_router(tutor.router, prefix="/api/v1")
+app.include_router(tutor_reviews.router, prefix="/api/v1")
 app.include_router(enrollments.router, prefix="/api/v1")
 app.include_router(quizzes.router, prefix="/api/v1")
 app.include_router(announcements.router, prefix="/api/v1")

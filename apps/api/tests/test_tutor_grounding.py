@@ -44,6 +44,24 @@ def _draft(**updates) -> TutorDraft:
     ).model_copy(update=updates)
 
 
+async def test_supported_tutor_suspicion_only_enqueues_the_student_message():
+    answer, _ = tutor._validated_tutor_answer(_draft(), QUESTION, {"S1": SOURCE})
+    calls = []
+
+    def handle(req):
+        calls.append((req.method, req.url.path))
+        if req.method == "GET":
+            return httpx.Response(200, json=[{"id": "student"}])
+        assert json.loads(req.content)["source_message_id"] == "student-message"
+        assert "resolution=ignore-duplicates" in req.headers["Prefer"]
+        return httpx.Response(201)
+
+    async with httpx.AsyncClient(transport=httpx.MockTransport(handle)) as client:
+        await tutor._persist_misconception(client, "https://fixture.test", {}, "course", "student",
+                                          "student-message", QUESTION, answer)
+    assert calls == [("GET", "/rest/v1/profiles"), ("POST", "/rest/v1/tutor_flags")]
+
+
 def test_select_evidence_filters_low_non_finite_and_duplicate_matches() -> None:
     duplicate = SOURCE.model_copy(update={"chunk_id": "duplicated", "content": NORMALIZED_SOURCE})
     unique = [
