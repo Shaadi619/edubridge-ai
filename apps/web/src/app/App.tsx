@@ -4233,7 +4233,7 @@ function TeacherSettings({ courses, darkMode, setDarkMode, onShowWorkChange }: {
           <button type="button" role="switch" aria-checked={course.showWork} aria-labelledby={`show-work-${course.id}`}
             onClick={() => onShowWorkChange(course.id, !course.showWork)}
             className={`relative mt-0.5 h-6 w-11 shrink-0 rounded-full transition-colors ${course.showWork ? "bg-primary" : "bg-muted-foreground/30"}`}>
-            <span className={`absolute top-0.5 h-5 w-5 rounded-full bg-white shadow transition-transform ${course.showWork ? "translate-x-[22px]" : "translate-x-0.5"}`} />
+            <span className={`absolute left-0 top-0.5 h-5 w-5 rounded-full bg-white shadow transition-transform ${course.showWork ? "translate-x-[22px]" : "translate-x-0.5"}`} />
           </button>
         </div>
       </div>)}{courses.length === 0 && <p className="text-sm text-muted-foreground">You have not created a course yet.</p>}</div>
