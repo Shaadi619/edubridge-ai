@@ -33,6 +33,7 @@ const QuizStage = lazy(() => import("./student/QuizStage"));
 const ProgressStage = lazy(() => import("./student/ProgressStage"));
 const CheckDialog = lazy(() => import("./student/CheckDialog"));
 const WorkStage = lazy(() => import("./student/WorkStage"));
+const MaterialsStage = lazy(() => import("./teacher/MaterialsStage"));
 
 // ─── Types ────────────────────────────────────────────────────────────────
 
@@ -81,6 +82,7 @@ type UploadedDoc = {
   progress: number;
   pages?: number;
   uploadedAt: string;
+  createdAt?: string;
   storagePath?: string;
 };
 
@@ -134,13 +136,6 @@ const STUDENTS = [
   { id: 5, name: "Sofia Reyes", initials: "SR", progress: 48, weak: ["Protein Synthesis", "Photosynthesis"], quizzes: 6, status: "struggling" },
   { id: 6, name: "Kai Yamamoto", initials: "KY", progress: 75, weak: ["Cell Division"], quizzes: 13, status: "active" },
   { id: 7, name: "Zoe Chen", initials: "ZC", progress: 88, weak: [], quizzes: 17, status: "excelling" },
-];
-
-const INITIAL_DOCS: UploadedDoc[] = [
-  { id: 1, name: "Chapter 12 — Cell Division.pdf", size: "2.4 MB", type: "pdf", status: "ready", progress: 100, pages: 18, uploadedAt: "Jun 12" },
-  { id: 2, name: "Lecture Notes Week 4.pdf", size: "1.1 MB", type: "pdf", status: "ready", progress: 100, pages: 7, uploadedAt: "Jun 15" },
-  { id: 3, name: "Genetics Supplementary.pdf", size: "3.8 MB", type: "pdf", status: "ready", progress: 100, pages: 24, uploadedAt: "Jun 18" },
-  { id: 4, name: "Lab Manual — Meiosis.pdf", size: "5.2 MB", type: "pdf", status: "ready", progress: 100, pages: 31, uploadedAt: "Jun 22" },
 ];
 
 const INITIAL_REQUESTS: EnrollRequest[] = [
@@ -450,6 +445,7 @@ function UploadModal({ onClose, onUploaded, onProcessed, courseId, courseName, u
       status: "processing",
       progress: 100,
       uploadedAt: new Date(material.created_at).toLocaleDateString(),
+      createdAt: material.created_at,
       storagePath: material.storage_path,
     };
     onUploaded(uploadedDoc);
@@ -506,7 +502,7 @@ function UploadModal({ onClose, onUploaded, onProcessed, courseId, courseName, u
               <div className="flex-1 min-w-0">
                 <div className="text-sm font-medium text-foreground truncate">{uploading.name}</div>
                 <div className="text-xs text-muted-foreground font-light mt-0.5">
-                  {uploading.progress < 100 ? "Uploading…" : "Processing with OCR…"}
+                  {uploading.progress < 75 ? "Uploading…" : "Saving to the course…"}
                 </div>
               </div>
               <span className="font-mono text-sm text-muted-foreground tabular-nums shrink-0">
@@ -542,149 +538,6 @@ function UploadModal({ onClose, onUploaded, onProcessed, courseId, courseName, u
           </>
         )}
       </motion.div>
-    </div>
-  );
-}
-
-// ─── Teacher Materials ────────────────────────────────────────────────────
-
-function TeacherMaterials({ docs, setDocs, onUploadClick, onViewDoc, courseName }: {
-  docs: UploadedDoc[];
-  setDocs: React.Dispatch<React.SetStateAction<UploadedDoc[]>>;
-  onViewDoc: (doc: UploadedDoc) => void;
-  onUploadClick: () => void;
-  courseName: string;
-}) {
-  const removeDocument = async (doc: UploadedDoc) => {
-    if (!supabase || typeof doc.id !== "string") return;
-    const { error } = await supabase.from("materials").delete().eq("id", doc.id);
-    if (error) {
-      toast.error(error.message);
-      return;
-    }
-    if (doc.storagePath) await supabase.storage.from("course-materials").remove([doc.storagePath]);
-    setDocs(previous => previous.filter(item => item.id !== doc.id));
-    toast.success("Document removed");
-  };
-
-  const docStatusBadge = (s: UploadedDoc["status"]) => {
-    if (s === "ready") return (
-      <span className="flex items-center gap-1.5 text-xs font-medium text-emerald-700 bg-emerald-50 border border-emerald-200 px-2 py-0.5 rounded-full">
-        <CheckCircle size={10} />Ready
-      </span>
-    );
-    if (s === "processing") return (
-      <span className="flex items-center gap-1.5 text-xs font-medium text-amber-700 bg-amber-50 border border-amber-200 px-2 py-0.5 rounded-full">
-        <RefreshCw size={10} className="animate-spin" />Processing
-      </span>
-    );
-    if (s === "uploading") return (
-      <span className="flex items-center gap-1.5 text-xs font-medium text-blue-700 bg-blue-50 border border-blue-200 px-2 py-0.5 rounded-full">
-        <Upload size={10} />Uploading
-      </span>
-    );
-    return (
-      <span className="flex items-center gap-1.5 text-xs font-medium text-red-700 bg-red-50 border border-red-200 px-2 py-0.5 rounded-full">
-        <AlertCircle size={10} />Error
-      </span>
-    );
-  };
-
-  const readyDocs = docs.filter(d => d.status === "ready");
-  const totalPages = readyDocs.reduce((a, d) => a + (d.pages ?? 0), 0);
-  const inProgress = docs.filter(d => d.status !== "ready" && d.status !== "error").length;
-
-  return (
-    <div>
-      <div className="mb-6 flex items-start justify-between flex-wrap gap-4">
-        <div>
-          <h1 className="font-display text-2xl text-primary">Course Materials</h1>
-          <p className="text-sm text-muted-foreground mt-1 font-light">{courseName} — documents prepared for AI indexing</p>
-        </div>
-        <motion.button whileHover={{ scale: 1.02 }} whileTap={{ scale: 0.97 }}
-          onClick={onUploadClick}
-          className="flex items-center gap-2 bg-primary text-primary-foreground text-sm font-semibold px-4 py-2.5 rounded-lg shadow-sm"
-        >
-          <Upload size={15} />Upload Document
-        </motion.button>
-      </div>
-
-      <div className="grid grid-cols-3 gap-4 mb-8">
-        {[
-          { label: "Total Documents", val: String(readyDocs.length), icon: FileText, color: "text-blue-600", bg: "bg-blue-50" },
-          { label: "Pages Indexed", val: String(totalPages), icon: BookMarked, color: "text-emerald-600", bg: "bg-emerald-50" },
-          { label: "Processing", val: String(inProgress), icon: RefreshCw, color: "text-amber-600", bg: "bg-amber-50" },
-        ].map(s => (
-          <div key={s.label} className="bg-card border border-border rounded-xl p-5 shadow-sm">
-            <div className="flex items-start justify-between mb-3">
-              <span className="text-xs text-muted-foreground font-mono uppercase tracking-wide">{s.label}</span>
-              <div className={`w-7 h-7 rounded-lg ${s.bg} flex items-center justify-center`}>
-                <s.icon size={14} className={s.color} />
-              </div>
-            </div>
-            <div className="font-display text-3xl text-primary">{s.val}</div>
-          </div>
-        ))}
-      </div>
-
-      <div className="bg-card border border-border rounded-xl overflow-hidden shadow-sm">
-        <div className="px-5 py-4 border-b border-border flex items-center justify-between">
-          <h2 className="font-semibold text-foreground">Uploaded Files</h2>
-          <div className="flex items-center gap-2 text-muted-foreground">
-            <Search size={13} />
-            <input placeholder="Search documents…" className="text-sm bg-transparent focus:outline-none placeholder:text-muted-foreground w-36" />
-          </div>
-        </div>
-        <div>
-          <AnimatePresence initial={false}>
-            {docs.map(doc => (
-              <motion.div key={doc.id} layout
-                initial={{ opacity: 0, height: 0 }}
-                animate={{ opacity: 1, height: "auto" }}
-                exit={{ opacity: 0, height: 0 }}
-                transition={{ duration: 0.22 }}
-                className="flex items-center gap-4 px-5 py-4 border-b border-border last:border-0 hover:bg-muted/20 transition-colors group cursor-pointer"
-                onClick={() => doc.status === "ready" && onViewDoc(doc)}
-              >
-                <div className="w-9 h-9 rounded-xl bg-red-50 flex items-center justify-center shrink-0">
-                  <FileText size={16} className="text-red-500" />
-                </div>
-                <div className="flex-1 min-w-0">
-                  <div className="text-sm font-medium text-foreground truncate">{doc.name}</div>
-                  <div className="flex items-center gap-3 mt-0.5">
-                    <span className="text-xs text-muted-foreground font-light">{doc.size}</span>
-                    {doc.status === "ready" && doc.pages && (
-                      <span className="text-xs text-muted-foreground font-light">{doc.pages} pages</span>
-                    )}
-                    <span className="text-xs text-muted-foreground font-light">· {doc.uploadedAt}</span>
-                  </div>
-                  {(doc.status === "uploading" || doc.status === "processing") && (
-                    <div className="mt-2 h-1 bg-muted rounded-full overflow-hidden w-48">
-                      <motion.div className="h-full bg-primary rounded-full"
-                        animate={{ width: doc.status === "processing" ? "75%" : `${doc.progress}%` }}
-                        transition={{ duration: 0.3 }}
-                      />
-                    </div>
-                  )}
-                </div>
-                <div className="shrink-0">{docStatusBadge(doc.status)}</div>
-                <button
-                  onClick={event => { event.stopPropagation(); void removeDocument(doc); }}
-                  className="opacity-0 group-hover:opacity-100 transition-opacity p-1.5 hover:bg-red-50 rounded-lg text-muted-foreground hover:text-red-500"
-                >
-                  <Trash2 size={14} />
-                </button>
-              </motion.div>
-            ))}
-          </AnimatePresence>
-        </div>
-        <div className="px-5 py-4 bg-muted/30 border-t border-border">
-          <p className="text-xs text-muted-foreground font-light leading-relaxed">
-            <span className="font-medium text-foreground">How indexing works: </span>
-            Uploaded files are OCR-processed and chunked into retrievable segments. Students can only ask questions answerable from these documents.
-          </p>
-        </div>
-      </div>
     </div>
   );
 }
@@ -1890,7 +1743,6 @@ function TeacherDashboard({ onLogout, darkMode, setDarkMode }: { onLogout: () =>
   const [requests, setRequests] = useState<EnrollRequest[]>([]);
   const [notifications, setNotifications] = useState<Notification[]>([]);
   const [announcements, setAnnouncements] = useState<Announcement[]>([]);
-  const [viewingDoc, setViewingDoc] = useState<UploadedDoc | null>(null);
   const [notificationFocus, setNotificationFocus] = useState<{
     key: number;
     courseId?: string;
@@ -2038,6 +1890,7 @@ function TeacherDashboard({ onLogout, darkMode, setDarkMode }: { onLogout: () =>
           progress: material.status === "ready" ? 100 : 75,
           pages: material.page_count ?? undefined,
           uploadedAt: new Date(material.created_at).toLocaleDateString(),
+          createdAt: material.created_at,
           storagePath: material.storage_path,
         })));
       });
@@ -2256,7 +2109,10 @@ function TeacherDashboard({ onLogout, darkMode, setDarkMode }: { onLogout: () =>
               {tab === "students" && selectedCourse && session && <TeacherStudents key={selectedCourse.id} searchQuery={searchQuery} courseId={selectedCourse.id} courseName={selectedCourse.name} accessToken={session.access_token} analytics={courseAnalytics} loading={analyticsLoading} focusedStudentId={activeFocus.studentId} focusedAttemptId={activeFocus.attemptId} focusKey={activeFocus.key} />}
               {tab === "analytics" && selectedCourse && session && <TeacherAnalytics course={selectedCourse} analytics={courseAnalytics} loading={analyticsLoading} accessToken={session.access_token} focusedMisconceptionId={activeFocus.misconceptionId} focusKey={activeFocus.key} />}
               {tab === "materials" && selectedCourse && (
-                <TeacherMaterials docs={docs} setDocs={setDocs} onUploadClick={() => setUploadOpen(true)} onViewDoc={setViewingDoc} courseName={selectedCourse.name} />
+                <Suspense fallback={<div role="status" className="eb-stage rounded-2xl px-8 py-8 text-sm text-[#A9B6C2]">Opening course material…</div>}>
+                  <MaterialsStage docs={docs} onRemoved={id => setDocs(previous => previous.filter(doc => doc.id !== id))}
+                    onUploadClick={() => setUploadOpen(true)} courseId={selectedCourse.id} courseName={selectedCourse.name} />
+                </Suspense>
               )}
               {tab === "settings" && <TeacherSettings courses={courses} darkMode={darkMode} setDarkMode={setDarkMode} onShowWorkChange={(id, enabled) => void setCourseShowWork(id, enabled)} />}
             </motion.div>
@@ -2280,7 +2136,6 @@ function TeacherDashboard({ onLogout, darkMode, setDarkMode }: { onLogout: () =>
             onCreate={createCourse}
           />
         )}
-        {viewingDoc && <DocViewerModal doc={viewingDoc} onClose={() => setViewingDoc(null)} />}
       </AnimatePresence>
       <NotificationsPanel
         open={notifOpen}
@@ -3628,99 +3483,6 @@ function StudentDashboard({ onLogout, darkMode, setDarkMode }: { onLogout: () =>
   );
 }
 
-// ─── Document Viewer Modal ────────────────────────────────────────────────
-
-const DOC_MOCK_CONTENT: Record<string, string[]> = {
-  "Chapter 12 — Cell Division.pdf": [
-    "Chapter 12: Cell Division",
-    "12.1 Introduction to Cell Division",
-    "Cell division is the process by which a parent cell divides into two or more daughter cells. Cell division is part of the life cycle of virtually all organisms.\n\nIn multicellular organisms, cell division serves two main purposes: (1) growth and repair of tissues, and (2) asexual reproduction in single-celled organisms.",
-    "12.2 Mitosis",
-    "Mitosis is a form of eukaryotic cell division that produces two daughter cells with the same number and kind of chromosomes as the parent nucleus, typical of ordinary tissue growth.\n\nPhases: Prophase → Metaphase → Anaphase → Telophase → Cytokinesis",
-    "12.3 Meiosis",
-    "Meiosis is a specialized form of cell division that reduces the chromosome number by half, from diploid (2n) to haploid (n), creating four genetically unique gametes.\n\nKey event: Crossing over during Prophase I creates new allele combinations — the primary source of genetic variation in sexual reproduction.",
-  ],
-  "Lecture Notes Week 4.pdf": [
-    "Week 4 Lecture Notes",
-    "Topic: DNA Structure and Replication",
-    "DNA is a double helix composed of two antiparallel strands connected by hydrogen bonds between complementary base pairs:\n• Adenine (A) pairs with Thymine (T)\n• Guanine (G) pairs with Cytosine (C)",
-    "Semi-Conservative Replication",
-    "Each strand of the original DNA serves as a template for a new complementary strand. The result: two daughter molecules, each containing one original and one newly synthesized strand.\n\nKey enzymes: DNA helicase (unwinds), DNA polymerase (builds new strand), DNA ligase (seals fragments).",
-  ],
-};
-
-const GENERIC_PAGES = [
-  "This document contains course-specific content for Biology 101.",
-  "All materials are grounded in peer-reviewed sources and align with the course curriculum.",
-  "Page content indexed and available for AI-powered Q&A through the Course Workspace.",
-];
-
-function DocViewerModal({ doc, onClose }: { doc: UploadedDoc; onClose: () => void }) {
-  const [page, setPage] = useState(0);
-  const content = DOC_MOCK_CONTENT[doc.name] ?? GENERIC_PAGES;
-  const totalPages = doc.pages ?? content.length;
-  const currentContent = content[page % content.length];
-  const isHeading = !currentContent.includes("\n") && currentContent.length < 50;
-
-  return (
-    <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/50">
-      <motion.div
-        initial={{ scale: 0.96, opacity: 0 }}
-        animate={{ scale: 1, opacity: 1 }}
-        exit={{ scale: 0.96, opacity: 0 }}
-        transition={{ duration: 0.2 }}
-        className="bg-card border border-border rounded-2xl shadow-2xl w-full max-w-2xl overflow-hidden flex flex-col"
-        style={{ maxHeight: "min(700px, 90vh)" }}
-      >
-        {/* Header */}
-        <div className="flex items-center gap-3 px-6 py-4 border-b border-border shrink-0">
-          <div className="w-9 h-9 rounded-xl bg-red-50 flex items-center justify-center shrink-0">
-            <FileText size={16} className="text-red-500" />
-          </div>
-          <div className="flex-1 min-w-0">
-            <div className="font-semibold text-foreground text-sm truncate">{doc.name}</div>
-            <div className="text-xs text-muted-foreground font-light">{doc.size} · {totalPages} pages · Uploaded {doc.uploadedAt}</div>
-          </div>
-          <button onClick={onClose} className="p-1.5 hover:bg-muted rounded-lg transition-colors text-muted-foreground">
-            <X size={16} />
-          </button>
-        </div>
-
-        {/* Content area */}
-        <div className="flex-1 overflow-y-auto p-8">
-          <AnimatePresence mode="wait" initial={false}>
-            <motion.div key={page}
-              initial={{ opacity: 0, x: 12 }} animate={{ opacity: 1, x: 0 }} exit={{ opacity: 0, x: -12 }}
-              transition={{ duration: 0.15 }}
-              className="max-w-prose mx-auto"
-            >
-              {isHeading ? (
-                <h2 className="font-display text-xl text-primary mb-4">{currentContent}</h2>
-              ) : (
-                <p className="text-sm text-foreground leading-relaxed font-light whitespace-pre-line">{currentContent}</p>
-              )}
-            </motion.div>
-          </AnimatePresence>
-        </div>
-
-        {/* Footer nav */}
-        <div className="flex items-center justify-between px-6 py-4 border-t border-border bg-muted/30 shrink-0">
-          <motion.button whileHover={{ scale: 1.02 }} whileTap={{ scale: 0.97 }}
-            onClick={() => setPage(p => Math.max(0, p - 1))} disabled={page === 0}
-            className="flex items-center gap-1.5 text-sm font-medium text-muted-foreground hover:text-foreground disabled:opacity-30 transition-colors">
-            ← Previous
-          </motion.button>
-          <span className="text-xs font-mono text-muted-foreground">Page {page + 1} of {content.length}</span>
-          <motion.button whileHover={{ scale: 1.02 }} whileTap={{ scale: 0.97 }}
-            onClick={() => setPage(p => Math.min(content.length - 1, p + 1))} disabled={page === content.length - 1}
-            className="flex items-center gap-1.5 text-sm font-medium text-muted-foreground hover:text-foreground disabled:opacity-30 transition-colors">
-            Next →
-          </motion.button>
-        </div>
-      </motion.div>
-    </div>
-  );
-}
 
 // ─── Course Create Modal ──────────────────────────────────────────────────
 
