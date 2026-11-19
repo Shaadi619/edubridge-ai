@@ -12,7 +12,7 @@ export type CourseGraphCitation = {
   source_kind: "page" | "slide" | "document";
 };
 
-export type SourceCitation = CourseGraphCitation & { chunk_id?: string };
+export type SourceCitation = CourseGraphCitation & { chunk_id?: string; quote?: string | null };
 
 export type CourseGraphSuggestion = {
   summary: string;
@@ -33,6 +33,24 @@ export type CourseGraphSuggestion = {
   }>;
 };
 
+export type GeneratedQuiz = {
+  id: string;
+  title: string;
+  difficulty_mode: "easy" | "adaptive" | "hard";
+  focus_concept: string | null;
+  prerequisite_concepts: string[];
+  questions: Array<{
+    id: string;
+    prompt: string;
+    options: string[];
+    correct_option: number;
+    explanation: string;
+    concept: string;
+    difficulty: number;
+    citations: SourceCitation[];
+  }>;
+};
+
 export type WorkAnalysis = {
   observed_work: string;
   summary: string;
@@ -42,9 +60,11 @@ export type WorkAnalysis = {
     observed_reasoning: string;
     status: "correct" | "needs_revision" | "unclear";
     feedback: string;
-    citations: CourseGraphCitation[];
+    citations: SourceCitation[];
+    /** False when a correction couldn't be matched to course text. Missing on older feedback. */
+    grounded?: boolean;
   }>;
-  citations: CourseGraphCitation[];
+  citations: SourceCitation[];
   misconception: {
     detected: boolean;
     concept: string | null;
@@ -71,25 +91,6 @@ export type WorkSubmission = {
 };
 
 export type ExplanationFormat = "simpler" | "analogy" | "worked_example" | "visual_outline";
-
-export type ConceptWalkthrough = {
-  title: string;
-  learning_goal: string;
-  steps: Array<{
-    title: string;
-    explanation: string;
-    scenario: string;
-    checkpoint: {
-      question: string;
-      options: string[];
-      correct_option: number;
-      correct_feedback: string;
-      revision_feedback: string;
-    };
-    citations: CourseGraphCitation[];
-  }>;
-  closing_challenge: string;
-};
 
 export type TeacherInterventionDraft = {
   rationale: string;
@@ -296,30 +297,16 @@ export const api = {
       { method: "POST", signal, body: JSON.stringify({ question, format }) },
       accessToken,
     ),
-  generateWalkthrough: (courseId: string, focus: string, accessToken: string) =>
-    request<ConceptWalkthrough>(
-      `/courses/${courseId}/walkthroughs/generate`,
-      { method: "POST", body: JSON.stringify({ focus }) },
-      accessToken,
-    ),
   generateQuiz: (courseId: string, accessToken: string, focusConcept?: string) =>
-    request<{
-      id: string;
-      title: string;
-      difficulty_mode: "easy" | "adaptive" | "hard";
-      focus_concept: string | null;
-      prerequisite_concepts: string[];
-      questions: Array<{
-        id: string;
-        prompt: string;
-        options: string[];
-        correct_option: number;
-        explanation: string;
-        concept: string;
-        difficulty: number;
-        citations: SourceCitation[];
-      }>;
-    }>(`/courses/${courseId}/quizzes/generate`, { method: "POST", body: JSON.stringify({ question_count: 4, focus_concept: focusConcept ?? null }) }, accessToken),
+    request<GeneratedQuiz>(`/courses/${courseId}/quizzes/generate`, { method: "POST", body: JSON.stringify({ question_count: 4, focus_concept: focusConcept ?? null }) }, accessToken),
+  /** Make sure one quiz is being written ahead of time for this course. */
+  prepareQuiz: (courseId: string, accessToken: string) =>
+    request<{ state: "waiting" | "preparing" | "unavailable" }>(`/courses/${courseId}/quizzes/prepare`, { method: "POST" }, accessToken),
+  /** Take the quiz written ahead of time; "preparing" means ask again shortly. */
+  takeWaitingQuiz: (courseId: string, accessToken: string) =>
+    request<{ state: "ready"; quiz: GeneratedQuiz } | { state: "preparing" | "unavailable" }>(
+      `/courses/${courseId}/quizzes/take-waiting`, { method: "POST" }, accessToken,
+    ),
   submitQuiz: (courseId: string, quizId: string, answers: Array<number | null>, confidences: Array<number | null>, accessToken: string) =>
     request<{ attempt_id: string; score: number; correct: number; total: number; assignment_completed: boolean; confidence_gaps: number }>(
       `/courses/${courseId}/quizzes/${quizId}/submit`,
@@ -387,13 +374,13 @@ export const api = {
     request<{
       verification_id: string;
       question: string;
-      citations: Array<{ document_title: string; page_number: number | null; source_kind: "page" | "slide" | "document" }>;
+      citations: Array<{ document_title: string; page_number: number | null; source_kind: "page" | "slide" | "document"; chunk_id?: string | null; quote?: string | null }>;
     }>(`/courses/${courseId}/misconceptions/${misconceptionId}/teach-back`, { method: "POST" }, accessToken),
   submitTeachBack: (courseId: string, verificationId: string, response: string, accessToken: string) =>
     request<{
       verdict: "still_present" | "improving" | "corrected";
       feedback: string;
-      citations: Array<{ document_title: string; page_number: number | null; source_kind: "page" | "slide" | "document" }>;
+      citations: Array<{ document_title: string; page_number: number | null; source_kind: "page" | "slide" | "document"; chunk_id?: string | null; quote?: string | null }>;
     }>(`/courses/${courseId}/teach-back/${verificationId}/submit`, { method: "POST", body: JSON.stringify({ response }) }, accessToken),
   transcribeTeachBack: (
     courseId: string,
@@ -408,13 +395,13 @@ export const api = {
     request<{
       verification_id: string;
       question: string;
-      citations: Array<{ document_title: string; page_number: number | null; source_kind: "page" | "slide" | "document" }>;
+      citations: Array<{ document_title: string; page_number: number | null; source_kind: "page" | "slide" | "document"; chunk_id?: string | null; quote?: string | null }>;
     }>(`/courses/${courseId}/misconceptions/${misconceptionId}/retention-check`, { method: "POST" }, accessToken),
   submitRetentionCheck: (courseId: string, checkId: string, response: string, accessToken: string) =>
     request<{
       verdict: "still_present" | "improving" | "corrected";
       feedback: string;
-      citations: Array<{ document_title: string; page_number: number | null; source_kind: "page" | "slide" | "document" }>;
+      citations: Array<{ document_title: string; page_number: number | null; source_kind: "page" | "slide" | "document"; chunk_id?: string | null; quote?: string | null }>;
     }>(`/courses/${courseId}/retention-check/${checkId}/submit`, { method: "POST", body: JSON.stringify({ response }) }, accessToken),
   teacherCourseAnalytics: (courseId: string, accessToken: string, signal?: AbortSignal) =>
     request<{
@@ -438,7 +425,10 @@ export const api = {
         recommended_action: string;
         due_at: string | null;
         practice_assigned: boolean;
-        citations: Array<{ document_title: string; page_number: number | null; source_kind: "page" | "slide" | "document" }>;
+        misconception_id?: string;
+        student_evidence?: string | null;
+        overdue_task?: boolean;
+        citations: Array<{ document_title: string; page_number: number | null; source_kind: "page" | "slide" | "document"; chunk_id?: string }>;
       }>;
       misconception_network: {
         nodes: Array<{ id: string; concept: string; affected_students: number; occurrences: number; connection_strength: number }>;
@@ -563,7 +553,7 @@ export const api = {
   cancelEnrollment: (id: string, accessToken: string) =>
     request<{ deleted: boolean }>(`/enrollments/${id}`, { method: "DELETE" }, accessToken),
   myCourses: (accessToken: string) =>
-    request<Array<{ id: string; name: string; subject: string; enrollment_code: string; teacher_id: string; teacher: string }>>(
+    request<Array<{ id: string; name: string; subject: string; enrollment_code: string; teacher_id: string; teacher: string; show_work_enabled: boolean }>>(
       "/me/courses", undefined, accessToken,
     ),
 };

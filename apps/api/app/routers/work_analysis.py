@@ -13,13 +13,15 @@ from pydantic import BaseModel, Field
 from pypdf import PdfReader
 
 from app.ai.azure_provider import AzureOpenAIProvider
-from app.ai.contracts import AITier, Citation, EvidenceChunk, ShowWorkAnalysis
+from app.ai.contracts import AITier, EvidenceChunk, EvidenceQuote, ShowWorkAnalysis
+from app.ai.evidence import find_quote
 from app.ai.embeddings import embedding_client
 from app.ai.prompts import SHOW_WORK_SYSTEM_PROMPT
 from app.auth import AuthenticatedUser, current_user
 from app.concepts import friendly_concept
 from app.config import Settings, get_settings
-from app.routers.tutor import _course_access, _source_kind
+from app.mastery import change_misconception_evidence
+from app.routers.tutor import _course_access, _same_concept, _source_kind
 
 router = APIRouter(prefix="/courses", tags=["show your work"])
 logger = logging.getLogger(__name__)
@@ -82,14 +84,16 @@ def _provider(settings: Settings) -> AzureOpenAIProvider:
 
 
 def _friendly_analysis(analysis: ShowWorkAnalysis, evidence: list[EvidenceChunk]) -> dict:
+    """Keep only citations whose quote really appears in the cited course text."""
     canonical = {item.chunk_id: item for item in evidence}
 
-    def citations(items: list[Citation]) -> list[dict]:
+    def citations(items: list[EvidenceQuote]) -> list[dict]:
         output: list[dict] = []
         seen: set[tuple[str, int | None]] = set()
-        for citation in items:
-            source = canonical.get(citation.chunk_id)
-            if not source:
+        for reference in items:
+            source = canonical.get(reference.chunk_id)
+            quote = find_quote(reference.quote, source.content) if source else None
+            if not source or not quote:
                 continue
             location = (source.document_title, source.page_number)
             if location in seen:
@@ -98,22 +102,36 @@ def _friendly_analysis(analysis: ShowWorkAnalysis, evidence: list[EvidenceChunk]
             output.append({
                 "document_title": source.document_title, "page_number": source.page_number,
                 "source_kind": _source_kind(source.document_title, source.page_number),
+                "chunk_id": source.chunk_id, "quote": quote,
             })
             if len(output) == 3:
                 break
         return output
 
-    steps = [{
-        "step_number": step.step_number, "observed_reasoning": step.observed_reasoning,
-        "status": step.status, "feedback": step.feedback, "citations": citations(step.citations),
-    } for step in analysis.steps[:12]]
-    grounded = analysis.grounded and bool(citations(analysis.citations) or any(step["citations"] for step in steps))
+    steps = []
+    for step in analysis.steps[:12]:
+        backed = citations(step.sources)
+        steps.append({
+            "step_number": step.step_number, "observed_reasoning": step.observed_reasoning,
+            "status": step.status, "feedback": step.feedback, "citations": backed,
+            # A correction with no verified course quote is shown, but marked as unbacked.
+            "grounded": bool(backed) or step.status != "needs_revision",
+        })
+    overall = citations(analysis.sources)
+    grounded = analysis.grounded and bool(overall or any(step["citations"] for step in steps))
     return {
         "observed_work": analysis.observed_work, "summary": analysis.summary,
         "strengths": analysis.strengths[:5], "steps": steps,
-        "citations": citations(analysis.citations), "misconception": analysis.misconception.model_dump(),
+        "citations": overall, "misconception": analysis.misconception.model_dump(),
         "grounded": grounded, "next_step": analysis.next_step,
     }
+
+
+def _review_status(friendly: dict) -> str:
+    """Only a confident misconception backed by verified course text goes to the teacher."""
+    misconception = friendly["misconception"]
+    confident = misconception.get("detected") and float(misconception.get("confidence") or 0) >= 0.8
+    return "pending" if confident and friendly["grounded"] else "not_required"
 
 
 async def _teacher_course(client: httpx.AsyncClient, base: str, headers: dict, course_id: str, user_id: str) -> None:
@@ -124,6 +142,22 @@ async def _teacher_course(client: httpx.AsyncClient, base: str, headers: dict, c
     response.raise_for_status()
     if not response.json():
         raise HTTPException(status_code=403, detail="Only the course teacher can review submitted work")
+
+
+SHOW_WORK_OFF = "Show Your Work isn’t turned on for this course. Your teacher can turn it on in Settings."
+
+
+async def _show_work_enabled(client: httpx.AsyncClient, base: str, headers: dict, course_id: str) -> bool:
+    """True only when the course has opted in; a missing column (unapplied migration) means off."""
+    response = await client.get(
+        f"{base}/rest/v1/courses", headers=headers,
+        params={"id": f"eq.{course_id}", "select": "show_work_enabled", "limit": "1"},
+    )
+    if response.status_code == 400:
+        return False
+    response.raise_for_status()
+    rows = response.json()
+    return bool(rows and rows[0].get("show_work_enabled"))
 
 
 @router.post("/{course_id}/work-submissions/analyze")
@@ -147,6 +181,8 @@ async def analyze_work(
     async with httpx.AsyncClient(timeout=60) as client:
         if not await _course_access(client, base, headers, course_id_string, user.id):
             raise HTTPException(status_code=403, detail="You are not an approved member of this course")
+        if not await _show_work_enabled(client, base, headers, course_id_string):
+            raise HTTPException(status_code=403, detail=SHOW_WORK_OFF)
         profile = await client.get(
             f"{base}/rest/v1/profiles", headers=headers,
             params={"id": f"eq.{user.id}", "role": "eq.student", "select": "id", "limit": "1"},
@@ -201,7 +237,7 @@ async def analyze_work(
                     user_prompt=prompt, output_type=ShowWorkAnalysis,
                 )
             friendly = _friendly_analysis(analysis, evidence)
-            review_status = "pending" if friendly["misconception"].get("detected") and float(friendly["misconception"].get("confidence") or 0) >= 0.8 else "not_required"
+            review_status = _review_status(friendly)
             updated = await client.patch(
                 f"{base}/rest/v1/work_submissions?id=eq.{submission['id']}", headers=headers,
                 json={"status": "analyzed", "analysis": friendly, "review_status": review_status},
@@ -272,6 +308,58 @@ async def teacher_work_submissions(
         return [{**row, "student": names.get(row["student_id"], "Student")} for row in rows]
 
 
+async def _record_reviewed_misconception(
+    client: httpx.AsyncClient,
+    base: str,
+    headers: dict,
+    *,
+    course_id: str,
+    student_id: str,
+    reviewer_id: str,
+    concept: str,
+    analysis: dict,
+    misconception: dict,
+) -> str:
+    """Add an agreed upload to the student's record.
+
+    If the student already has a mistake on the same idea, count this as
+    another time it showed up rather than listing it twice.
+    """
+    label = misconception.get("label") or concept
+    now = datetime.now(UTC).isoformat()
+    details = {
+        "explanation": misconception.get("explanation") or analysis.get("summary") or "Misconception observed in submitted work.",
+        "student_evidence": misconception.get("evidence_from_student") or analysis.get("observed_work") or "Submitted work",
+        "confidence": misconception.get("confidence"),
+        "recommended_intervention": misconception.get("recommended_intervention") or analysis.get("next_step"),
+        "reviewed_by": reviewer_id,
+        "reviewed_at": now,
+    }
+    existing = await client.get(
+        f"{base}/rest/v1/misconceptions", headers=headers,
+        params={"course_id": f"eq.{course_id}", "student_id": f"eq.{student_id}", "status": "neq.dismissed",
+                "select": "id,concept,label,status,occurrence_count", "order": "created_at.desc"},
+    )
+    rows = existing.json() if existing.is_success else []
+    match = next((row for row in rows if _same_concept(row["concept"], concept) or _same_concept(row.get("label") or "", label)), None)
+    if match:
+        response = await client.patch(
+            f"{base}/rest/v1/misconceptions?id=eq.{match['id']}", headers=headers,
+            json={**details, "status": "open", "learning_status": "open", "verified_at": None,
+                  "occurrence_count": int(match.get("occurrence_count") or 1) + 1, "last_detected_at": now},
+        )
+        response.raise_for_status()
+        if match.get("status") != "open":
+            await change_misconception_evidence(client, base, headers, course_id=course_id, student_id=student_id, concept=match["concept"], delta=1)
+        return match["id"]
+    created = await client.post(f"{base}/rest/v1/misconceptions", headers=headers, json={
+        "course_id": course_id, "student_id": student_id, "concept": concept, "label": label, **details,
+    })
+    created.raise_for_status()
+    await change_misconception_evidence(client, base, headers, course_id=course_id, student_id=student_id, concept=concept, delta=1)
+    return created.json()[0]["id"]
+
+
 @router.patch("/teacher/{course_id}/work-submissions/{submission_id}/review")
 async def review_work_submission(
     course_id: UUID,
@@ -302,17 +390,11 @@ async def review_work_submission(
             concept = friendly_concept(misconception.get("concept") or misconception.get("label") or "")
             if not concept:
                 raise HTTPException(status_code=422, detail="The misconception suggestion has no usable concept")
-            created = await client.post(f"{base}/rest/v1/misconceptions", headers=headers, json={
-                "course_id": str(course_id), "student_id": submission["student_id"],
-                "concept": concept, "label": misconception.get("label") or concept,
-                "explanation": misconception.get("explanation") or analysis.get("summary") or "Misconception observed in submitted work.",
-                "student_evidence": misconception.get("evidence_from_student") or analysis.get("observed_work") or "Submitted work",
-                "confidence": misconception.get("confidence"),
-                "recommended_intervention": misconception.get("recommended_intervention") or analysis.get("next_step"),
-                "reviewed_by": user.id, "reviewed_at": datetime.now(UTC).isoformat(),
-            })
-            created.raise_for_status()
-            misconception_id = created.json()[0]["id"]
+            misconception_id = await _record_reviewed_misconception(
+                client, base, headers,
+                course_id=str(course_id), student_id=submission["student_id"], reviewer_id=user.id,
+                concept=concept, analysis=analysis, misconception=misconception,
+            )
         updated = await client.patch(
             f"{base}/rest/v1/work_submissions?id=eq.{submission_id}", headers=headers,
             json={"review_status": request.decision, "reviewed_by": user.id, "reviewed_at": datetime.now(UTC).isoformat(), "misconception_id": misconception_id},

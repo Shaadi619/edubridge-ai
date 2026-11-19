@@ -75,7 +75,13 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     let revision = 0;
     const { data: listener } = supabase.auth.onAuthStateChange((_event, nextSession) => {
       if (!active) return;
-      setSession(nextSession);
+      // Supabase repeats events (for example when the tab regains focus) with the same login.
+      // Keep the existing session then, so screens don't reload for nothing.
+      setSession(current => (
+        current && nextSession
+        && current.access_token === nextSession.access_token
+        && current.user.id === nextSession.user.id
+      ) ? current : nextSession);
       const userId = nextSession?.user.id ?? null;
       // Token renewal and repeated sign-in events for the same user are not navigation.
       if (identity === userId && userId !== null) return;

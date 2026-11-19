@@ -2,7 +2,7 @@ from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 
 from app.config import get_settings
-from app.routers import announcements, course_graph, digital_twin, enrollments, health, interventions, materials, me, notifications, quizzes, search, study_plans, teachback, tutor, voice, walkthroughs, work_analysis
+from app.routers import announcements, course_graph, digital_twin, enrollments, health, interventions, materials, me, notifications, quizzes, search, study_plans, teachback, tutor, voice, work_analysis
 
 settings = get_settings()
 
@@ -37,6 +37,5 @@ app.include_router(study_plans.router, prefix="/api/v1")
 app.include_router(course_graph.router, prefix="/api/v1")
 app.include_router(work_analysis.router, prefix="/api/v1")
 app.include_router(voice.router, prefix="/api/v1")
-app.include_router(walkthroughs.router, prefix="/api/v1")
 app.include_router(interventions.router, prefix="/api/v1")
 app.include_router(digital_twin.router, prefix="/api/v1")

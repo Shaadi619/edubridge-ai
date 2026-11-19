@@ -1,7 +1,7 @@
 from enum import StrEnum
 from typing import Literal
 
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, PrivateAttr
 
 
 class AITier(StrEnum):
@@ -59,6 +59,9 @@ class QuizQuestion(BaseModel):
     concept: str
     difficulty: int = Field(ge=1, le=5)
     citations: list[Citation]
+    # Verified quote per cited chunk. Private, so it never enters the schema the
+    # model is asked to fill; the verifier sets it after matching each quote.
+    _evidence_quotes: dict[str, str] = PrivateAttr(default_factory=dict)
 
 
 class QuizResult(BaseModel):
@@ -128,7 +131,8 @@ class WorkStepFeedback(BaseModel):
     observed_reasoning: str
     status: Literal["correct", "needs_revision", "unclear"]
     feedback: str
-    citations: list[Citation]
+    # Exact course quotes that back this step's feedback; checked against the chunk text.
+    sources: list[EvidenceQuote] = Field(default_factory=list, max_length=3)
 
 
 class ShowWorkAnalysis(BaseModel):
@@ -136,33 +140,10 @@ class ShowWorkAnalysis(BaseModel):
     summary: str
     strengths: list[str]
     steps: list[WorkStepFeedback]
-    citations: list[Citation]
+    sources: list[EvidenceQuote] = Field(default_factory=list, max_length=3)
     misconception: MisconceptionAnalysis
     grounded: bool
     next_step: str
-
-
-class WalkthroughCheckpoint(BaseModel):
-    question: str
-    options: list[str] = Field(min_length=2, max_length=4)
-    correct_option: int = Field(ge=0, le=3)
-    correct_feedback: str
-    revision_feedback: str
-
-
-class WalkthroughStep(BaseModel):
-    title: str
-    explanation: str
-    scenario: str
-    checkpoint: WalkthroughCheckpoint
-    citations: list[Citation]
-
-
-class WalkthroughResult(BaseModel):
-    title: str
-    learning_goal: str
-    steps: list[WalkthroughStep] = Field(min_length=3, max_length=5)
-    closing_challenge: str
 
 
 class TeacherInterventionDraft(BaseModel):

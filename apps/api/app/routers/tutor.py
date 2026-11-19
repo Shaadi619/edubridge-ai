@@ -70,6 +70,13 @@ def _remove_internal_references(text: str) -> str:
     cleaned = re.sub(rf"\b(?:see\s+)?chunk\s+(?:{uuid}|[a-z0-9_-]{{6,}})\b", "the course material", cleaned, flags=re.IGNORECASE)
     cleaned = re.sub(r"\s*\[\s*\{.*?\"chunk_id\".*?\}\s*\]", "", cleaned, flags=re.IGNORECASE | re.DOTALL)
     cleaned = re.sub(r"\s*\[\s*S\d+(?:\s*,\s*S\d+)*\s*\]", "", cleaned, flags=re.IGNORECASE)
+    # Any bracket that names chunk IDs or holds a database ID, e.g. "[chunk_id: 822e…; chunk_id: 127a…]".
+    any_uuid = r"[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}"
+    cleaned = re.sub(rf"\s*[\[(][^\[\]()]*?(?:chunk[ _-]?ids?\b|{any_uuid})[^\[\]()]*[\])]", "", cleaned, flags=re.IGNORECASE)
+    cleaned = re.sub(rf"\s*\bchunk[ _-]?ids?\s*[:=]?\s*{any_uuid}", "", cleaned, flags=re.IGNORECASE)
+    cleaned = re.sub(rf"\s*{any_uuid}", "", cleaned, flags=re.IGNORECASE)
+    cleaned = re.sub(r"[ \t]+([.,;:!?])", r"\1", cleaned)
+    cleaned = re.sub(r"[ \t]{2,}", " ", cleaned)
     return cleaned.strip()
 
 
@@ -242,14 +249,19 @@ def _normalized(value: str) -> str:
 
 def _same_concept(left: str, right: str) -> bool:
     def tokens(value: str) -> set[str]:
-        ignored = {"and", "or", "the", "a", "an", "of", "vs", "versus", "processing", "concept"}
+        ignored = {
+            "and", "or", "the", "a", "an", "of", "in", "to", "for", "with", "vs", "versus",
+            "processing", "concept", "misconception", "misconceptions", "misunderstanding", "misunderstandings",
+        }
         return {token.removesuffix("s") for token in re.findall(r"[a-z0-9]+", value.lower()) if token not in ignored}
 
     left_tokens, right_tokens = tokens(left), tokens(right)
     if not left_tokens or not right_tokens:
         return _normalized(left) == _normalized(right)
     overlap = len(left_tokens & right_tokens)
-    return overlap >= 2 and overlap / min(len(left_tokens), len(right_tokens)) >= 0.6
+    smaller = min(len(left_tokens), len(right_tokens))
+    # A one-word idea ("sequential") matches a longer title that contains it.
+    return overlap >= min(2, smaller) and overlap / smaller >= 0.6
 
 
 async def _persist_misconception(
