@@ -1158,6 +1158,8 @@ function TeacherOverview({ requests, setRequests, announcements, setAnnouncement
       </Suspense>
       <Suspense fallback={<div role="status" className="eb-stage mb-10 rounded-2xl px-8 py-8 text-sm text-[#A9B6C2]">Loading the course…</div>}>
         <CourseDesk
+          accessToken={accessToken}
+          onAnalyticsChanged={onAnalyticsChanged}
           course={course}
           courses={courses}
           analytics={analytics}

@@ -2,7 +2,7 @@ import { useEffect, useLayoutEffect, useRef, useState, type ReactNode } from "re
 import { toast } from "sonner";
 import { ArrowRight, Check, X } from "lucide-react";
 
-import { api, type GeneratedQuiz as GeneratedQuizType } from "../../lib/api";
+import { api, type QuizReceipt, type GeneratedQuiz as GeneratedQuizType } from "../../lib/api";
 import { readQuizDraft, writeQuizDraft } from "../../lib/studentSession";
 import { renderText } from "./renderText";
 import SourceStage, { type StageCitation } from "./SourceStage";
@@ -37,7 +37,9 @@ export default function QuizStage({ userId, courseId, courseName, accessToken, o
   const [selectedAnswer, setSelectedAnswer] = useState<number | null>(initialDraft?.selectedAnswer ?? null);
   const [selectedConfidence, setSelectedConfidence] = useState<number | null>(initialDraft?.selectedConfidence ?? null);
   const [showExplanation, setShowExplanation] = useState(initialDraft?.showExplanation ?? false);
-  const [showResults, setShowResults] = useState(initialDraft?.showResults ?? false);
+  // An older, completed draft without a receipt can retry the final step safely.
+  const [receipt, setReceipt] = useState<QuizReceipt | null>(initialDraft?.receipt ?? null);
+  const showResults = receipt !== null;
   const [practiceTopic, setPracticeTopic] = useState<string | null>(null);
   const [savingAttempt, setSavingAttempt] = useState(false);
   const [replaceQuiz, setReplaceQuiz] = useState(false);
@@ -88,7 +90,7 @@ export default function QuizStage({ userId, courseId, courseName, accessToken, o
       setQuestionIndex(0);
       setSelectedAnswer(null);
       setShowExplanation(false);
-      setShowResults(false);
+      setReceipt(null);
       setPracticeTopic(null);
       setReplaceQuiz(false);
       setActiveSource(null);
@@ -104,9 +106,9 @@ export default function QuizStage({ userId, courseId, courseName, accessToken, o
   useLayoutEffect(() => {
     if (!quiz) return;
     writeQuizDraft(userId, courseId, {
-      quiz, questionIndex, answers, confidences, selectedAnswer, selectedConfidence, showExplanation, showResults,
+      quiz, questionIndex, answers, confidences, selectedAnswer, selectedConfidence, showExplanation, showResults, receipt,
     });
-  }, [userId, courseId, quiz, questionIndex, answers, confidences, selectedAnswer, selectedConfidence, showExplanation, showResults]);
+  }, [userId, courseId, quiz, questionIndex, answers, confidences, selectedAnswer, selectedConfidence, showExplanation, showResults, receipt]);
 
   const shell = (children: ReactNode) => (
     <div className="eb-stage min-h-[calc(100vh-3.5rem)] px-5 py-8 sm:px-10">{children}</div>
@@ -152,7 +154,6 @@ export default function QuizStage({ userId, courseId, courseName, accessToken, o
   const q = questions[questionIndex];
   const isLastQuestion = questionIndex === questions.length - 1;
   const isCorrect = selectedAnswer === q.correct_option;
-  const correctCount = answers.filter((answer, index) => answer === questions[index].correct_option).length;
 
   const handleNext = async () => {
     if (submissionInFlight.current) return;
@@ -166,8 +167,8 @@ export default function QuizStage({ userId, courseId, courseName, accessToken, o
       submissionInFlight.current = true;
       setSavingAttempt(true);
       try {
-        await api.submitQuiz(courseId, quiz.id, newAnswers, newConfidences, accessToken);
-        setShowResults(true);
+        const saved = await api.submitQuiz(courseId, quiz.id, newAnswers, newConfidences, accessToken);
+        if (alive.current) setReceipt(saved);
       } catch (error) {
         toast.error(error instanceof Error ? error.message : "Quiz score could not be saved.");
       } finally {
@@ -183,25 +184,31 @@ export default function QuizStage({ userId, courseId, courseName, accessToken, o
     }
   };
 
-  if (showResults) {
-    const wrongTopics = [...new Set(questions.filter((question, index) => answers[index] !== question.correct_option).map(question => question.concept))];
+  if (receipt) {
+    const outcomes = new Map(receipt.outcomes?.map(row => [row.question_id, row]));
+    const complete = outcomes.size === receipt.total && questions.length === receipt.total
+      && questions.every(q => typeof outcomes.get(q.id)?.is_correct === "boolean")
+      && [...outcomes.values()].filter(row => row.is_correct).length === receipt.correct;
+    const reviewed = complete ? questions : [];
+    const wrongTopics = [...new Set(reviewed.filter(q => !outcomes.get(q.id)!.is_correct).map(q => q.concept))];
     return shell(
       <div className="mx-auto flex max-w-[720px] flex-col gap-8">
         {loadError && <p role="alert" className="m-0 rounded-xl border border-[rgba(232,144,127,0.4)] bg-[rgba(232,144,127,0.08)] px-4 py-3">{loadError}</p>}
         <header className="flex flex-col gap-2">
           <span className="text-sm text-[var(--eb-text-muted)]">{quiz.title}</span>
-          <h2 className="m-0 text-[40px] font-semibold leading-none tracking-[-0.025em]">{correctCount} of {questions.length} correct</h2>
+          <h2 className="m-0 text-[40px] font-semibold leading-none tracking-[-0.025em]">{receipt.correct} of {receipt.total} correct</h2>
+          {!complete && <p>Your score is saved. The question-by-question review is unavailable.</p>}
           <div aria-hidden="true" className="mt-3 flex gap-1.5">
-            {questions.map((question, index) => (
+            {reviewed.map(question => (
               <span key={question.id} className="h-1.5 flex-1 rounded-full"
-                style={{ background: answers[index] === question.correct_option ? "var(--eb-light)" : WRONG, opacity: answers[index] === question.correct_option ? 1 : 0.7 }} />
+                style={{ background: outcomes.get(question.id)!.is_correct ? "var(--eb-light)" : WRONG, opacity: outcomes.get(question.id)!.is_correct ? 1 : 0.7 }} />
             ))}
           </div>
         </header>
 
         <ol className="m-0 flex list-none flex-col gap-3 p-0">
-          {questions.map((question, index) => {
-            const right = answers[index] === question.correct_option;
+          {reviewed.map(question => {
+            const { is_correct: right, confidence } = outcomes.get(question.id)!;
             return (
               <li key={question.id} className="flex gap-3.5 rounded-xl border border-[var(--eb-line-soft)] bg-[var(--eb-raised-2)] px-4 py-3.5">
                 <span aria-hidden="true" className="mt-0.5 flex h-6 w-6 shrink-0 items-center justify-center rounded-full"
@@ -212,7 +219,7 @@ export default function QuizStage({ userId, courseId, courseName, accessToken, o
                   <span className="text-[13px] text-[var(--eb-text-muted)]">{question.concept}<span className="sr-only">{right ? ", correct" : ", incorrect"}</span></span>
                   <span className="text-[15px] font-medium leading-snug">{question.prompt}</span>
                   {!right && <span className="text-sm text-[var(--eb-text-soft)]">Answer: <span className="font-semibold text-[var(--eb-text)]">{question.options[question.correct_option]}</span></span>}
-                  {!right && confidences[index] === 3 && (
+                  {!right && confidence === 3 && (
                     <span className="text-sm text-[var(--eb-text)]">You were very sure here, so it’s worth reviewing your reasoning.</span>
                   )}
                 </div>

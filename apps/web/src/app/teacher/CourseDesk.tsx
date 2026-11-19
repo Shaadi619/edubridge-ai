@@ -1,7 +1,8 @@
-import { useEffect, useState } from "react";
+import { useCallback, useEffect, useState } from "react";
 import { toast } from "sonner";
 
-import type { api } from "../../lib/api";
+import { api } from "../../lib/api";
+import { useScopedQuery, useScopedRequest } from "../useScopedRequest";
 
 type Analytics = Awaited<ReturnType<typeof api.teacherCourseAnalytics>>;
 type WorkReview = Awaited<ReturnType<typeof api.teacherWorkSubmissions>>[number];
@@ -37,11 +38,60 @@ function Heading({ title, note, action }: { title: string; note?: string; action
   );
 }
 
+function TutorReviews({courseId, token, onConfirmed}: {courseId: string; token: string; onConfirmed: () => void}) {
+  const load = useCallback((signal: AbortSignal) => api.teacherTutorFlags(courseId, token, signal), [courseId, token]);
+  const {data, loading, refresh} = useScopedQuery(courseId, load, "Could not load tutor observations.");
+  const start = useScopedRequest(courseId);
+  const [busy, setBusy] = useState(false);
+  const [error, setError] = useState("");
+  const [reviewed, setReviewed] = useState<string[]>([]);
+  const rows = data?.filter(row => !reviewed.includes(row.source_message_id));
+  async function decide(id: string, decision: "confirmed" | "dismissed") {
+    const request = start(false);
+    if (!request) return;
+    setBusy(true);
+    setError("");
+    try {
+      await api.reviewTutorFlag(courseId, id, decision, token, request.signal);
+      if (!request.isCurrent()) return;
+      setReviewed(previous => [...previous, id]);
+      toast.success(decision === "confirmed" ? "Misconception confirmed" : "Observation dismissed");
+      if (decision === "confirmed") onConfirmed();
+      await refresh();
+    } catch (e) {
+      if (request.isCurrent()) setError(e instanceof Error ? e.message : "Could not save this review.");
+    } finally {
+      if (request.isCurrent()) setBusy(false);
+      request.finish();
+    }
+  }
+  return <section className="flex min-w-0 flex-col gap-3" aria-label="Tutor observations">
+    <Heading title="Tutor observations" note="Read the student’s words before deciding. Only confirmed observations count toward mastery." />
+    {loading ? <p role="status">Loading observations…</p> : !rows || error ? <div role="alert">
+      <p>{error || "Could not load tutor observations."}</p>
+      <button type="button" className={quietButton} onClick={() => {setError(""); void refresh();}}>Refresh observations</button>
+    </div> : rows.length === 0 ? <p className="text-sm text-[var(--eb-text-muted)]">No tutor observations waiting for review.</p> : null}
+    <ul className="m-0 flex list-none flex-col p-0">{rows?.map(row => <li key={row.source_message_id}
+      className="flex min-w-0 flex-col gap-2 border-b border-[var(--eb-line-soft)] py-3 [overflow-wrap:anywhere]">
+      <strong>{row.student} · {row.concept}</strong>
+      <blockquote className="m-0 whitespace-pre-wrap border-l-2 border-[var(--eb-student-line)] pl-3">{row.message}</blockquote>
+      <p className="m-0 text-sm text-[var(--eb-text-soft)]">Tutor’s interpretation: {row.explanation}</p>
+      <div className="flex flex-wrap gap-2">
+        <button type="button" className={primaryButton} disabled={busy || !!error} onClick={() => void decide(row.source_message_id, "confirmed")}>Confirm misconception</button>
+        <button type="button" className={quietButton} disabled={busy || !!error} onClick={() => void decide(row.source_message_id, "dismissed")}>Dismiss observation</button>
+      </div>
+    </li>)}</ul>
+  </section>;
+}
+
 export default function CourseDesk({
+  accessToken, onAnalyticsChanged,
   course, courses, analytics, analyticsLoading, requests, onResolveRequest, workReviews, reviewingWorkId, onReviewWork,
   announcements, onPostAnnouncement, onDeleteAnnouncement, onNewCourse, focusedEnrollmentId, focusKey,
 }: {
   course: DeskCourse;
+  accessToken: string;
+  onAnalyticsChanged: () => void;
   courses: DeskCourse[];
   analytics: Analytics | null;
   analyticsLoading: boolean;
@@ -145,6 +195,8 @@ export default function CourseDesk({
               </ul>
             )}
           </div>
+
+          <TutorReviews key={course.id} courseId={course.id} token={accessToken} onConfirmed={onAnalyticsChanged} />
 
           {workReviews.length > 0 && (
             <div className="flex flex-col gap-3">

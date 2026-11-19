@@ -42,6 +42,16 @@ test("isolates students and courses and clears the current student on sign-out",
   assert.equal(readStudentLocation("student-1").tab, "");
 });
 
+test("restores the committed result even when the draft choices came from another tab", () => {
+  data.clear();
+  const receipt = { attempt_id: "saved", correct: 0, total: 2, score: 0,
+    outcomes: [{ question_id: "q2", is_correct: false, confidence: 1 },
+      { question_id: "q1", is_correct: false, confidence: 2 }] };
+  writeQuizDraft("student-1", "course-a", { ...quizDraft, showResults: true, receipt });
+  assert.deepEqual(readQuizDraft("student-1", "course-a").receipt, receipt);
+  assert.equal(readQuizDraft("student-2", "course-a"), null);
+});
+
 test("ignores expired or invalid snapshots", () => {
   data.clear();
   writeQuizDraft("student-1", "course-a", quizDraft);
