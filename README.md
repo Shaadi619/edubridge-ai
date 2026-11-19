@@ -45,7 +45,9 @@ Students ask questions, take quizzes and upload their working. Every answer and 
 - Retrieval is limited to the active course. Citations point to stored pages, not to file names the model made up.
 - A quote is lit only if it is found in the stored page text. Quotes that don't match are dropped, and the feedback says so.
 - Quiz answer keys are checked independently against the course before a quiz is published.
-- A suspected misunderstanding from uploaded work goes on a student's record only after the teacher agrees.
+- Suspicions from tutor chat and uploaded work do not count toward mastery until the course teacher confirms them. For chat, the course desk shows the student's original message alongside the tutor's interpretation. Dismissing the observation leaves mastery unchanged.
+
+For upgrades, apply `20261119131611_tutor_evidence_review.sql` before rolling out the new API and web app. This rule applies to new chat observations; the migration does not reclassify past student records.
 
 More in [docs/architecture.md](docs/architecture.md).
 
