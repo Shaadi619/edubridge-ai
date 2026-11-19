@@ -1,4 +1,6 @@
 from app.routers.digital_twin import (
+    match_topic,
+    topic_evidence,
     assessment_issues,
     chunk_supports_topic,
     simulated_learner_profiles,
@@ -82,8 +84,35 @@ def test_simulated_learners_follow_prerequisites_without_real_student_data() -> 
     assert missing["at_risk_topics"] == ["Application"]
     assert ready["assumed_mastered"] == ["Foundations"]
     assert ready["next_steps"][0]["topic"] == "Application"
-    assert "focused question" in ready["teacher_checks"][1]
+    assert "quiz question" in ready["teacher_checks"][1]
 
 
 def test_simulated_learners_require_a_course_map() -> None:
     assert simulated_learner_profiles([]) == []
+
+
+def test_quiz_concepts_match_course_topics_by_shared_words() -> None:
+    topics = [
+        "Self-Attention (Q, K, V and scaled dot-product)",
+        "Multi-Head Attention",
+        "Recurrent Neural Network (RNN) — sequential processing",
+        "Transformer (High-Level Overview)",
+    ]
+    assert match_topic("Q/K/V roles in self-attention", topics) == topics[0]
+    assert match_topic("Sequential vs. parallel processing in sequence models", topics) == topics[2]
+    assert match_topic("multi-head attention", topics) == topics[1]
+    assert match_topic("Transformers overview", topics) == topics[3]
+    # One shared generic word is not enough.
+    assert match_topic("Attention span in classrooms", topics) is None
+    assert match_topic("Photosynthesis", topics) is None
+
+
+def test_topic_evidence_counts_each_student_once() -> None:
+    rows = [
+        {"student_id": "a", "mastery_score": 80, "total_answers": 3, "completed_teach_backs": 0},
+        {"student_id": "a", "mastery_score": 40, "total_answers": 2, "completed_teach_backs": 0},
+        {"student_id": "b", "mastery_score": 90, "total_answers": 0, "completed_teach_backs": 1},
+        {"student_id": "c", "mastery_score": 10, "total_answers": 0, "completed_teach_backs": 0},
+    ]
+    assert topic_evidence(rows) == (2, 75)
+    assert topic_evidence([]) == (0, None)

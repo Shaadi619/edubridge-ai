@@ -27,6 +27,52 @@ def topic_tokens(value: str) -> set[str]:
     }
 
 
+def _stem(token: str) -> str:
+    return token[:-1] if len(token) > 4 and token.endswith("s") and not token.endswith("ss") else token
+
+
+def match_topic(concept: str, topic_names: list[str]) -> str | None:
+    """Course topic a quiz or mastery concept belongs to.
+
+    Quiz questions label their concept in their own words ("Q/K/V roles in
+    self-attention"), so exact names rarely match ("Self-Attention (Q, K, V and
+    scaled dot-product)"). Fall back to the topic sharing most of its words.
+    """
+    key = concept_key(concept)
+    for name in topic_names:
+        if concept_key(name) == key:
+            return name
+    wanted = {_stem(token) for token in topic_tokens(concept)}
+    if not wanted:
+        return None
+    best: tuple[float, int, str] | None = None
+    for name in topic_names:
+        offered = {_stem(token) for token in topic_tokens(name)}
+        shared = len(wanted & offered)
+        if not shared or not offered:
+            continue
+        score = shared / min(len(wanted), len(offered))
+        if score >= 0.5 and (best is None or (score, shared) > best[:2]):
+            best = (score, shared, name)
+    return best[2] if best else None
+
+
+def topic_evidence(rows: list[dict]) -> tuple[int, int | None]:
+    """Students with answers on a topic, and the class average across those students.
+
+    One student can have several concept records that belong to the same topic;
+    average within each student first so nobody is counted twice.
+    """
+    per_student: dict[str, list[float]] = defaultdict(list)
+    for row in rows:
+        if int(row.get("total_answers") or 0) > 0 or int(row.get("completed_teach_backs") or 0) > 0:
+            per_student[str(row.get("student_id"))].append(float(row["mastery_score"]))
+    if not per_student:
+        return 0, None
+    averages = [sum(scores) / len(scores) for scores in per_student.values()]
+    return len(averages), round(sum(averages) / len(averages))
+
+
 def chunk_supports_topic(topic: str, content: str) -> bool:
     normalized_topic = " ".join(re.findall(r"[a-z0-9]+", topic.lower()))
     normalized_content = " ".join(re.findall(r"[a-z0-9]+", content.lower()))
@@ -44,6 +90,7 @@ def assessment_issues(
     question: dict,
     known_topic_keys: set[str],
     supported_topic_keys: set[str],
+    topic_key: str | None = None,
 ) -> list[dict]:
     """Find reviewable assessment risks without making a semantic correctness claim."""
     issues: list[dict] = []
@@ -51,7 +98,7 @@ def assessment_issues(
     options = [str(option).strip() for option in (question.get("options") or [])]
     correct_option = int(question.get("correct_option") or 0)
     concept = str(question.get("concept") or "").strip()
-    topic_key = concept_key(concept)
+    topic_key = topic_key or concept_key(concept)
 
     def add(code: str, severity: str, label: str, detail: str, recommendation: str) -> None:
         issues.append({
@@ -62,48 +109,48 @@ def assessment_issues(
     normalized_options = [" ".join(re.findall(r"[a-z0-9]+", option.lower())) for option in options]
     if not options or correct_option >= len(options):
         add(
-            "invalid_answer", "high", "Invalid answer key",
-            "The recorded correct option does not point to an available answer.",
-            "Correct the answer key before students receive this question.",
+            "invalid_answer", "high", "The correct answer is missing",
+            "The answer marked as correct isn't one of the choices.",
+            "Pick the right answer for this question before students see it.",
         )
     if len(set(normalized_options)) != len(normalized_options):
         add(
-            "duplicate_options", "high", "Duplicate answer options",
-            "Two or more answer choices are identical after punctuation and case are ignored.",
-            "Replace the duplicate choices with distinct, plausible alternatives.",
+            "duplicate_options", "high", "Two choices are the same",
+            "Two or more answer choices say exactly the same thing.",
+            "Replace the repeated choice with a different, believable answer.",
         )
     prompt_words = re.findall(r"[a-z0-9]+", prompt.lower())
     if len(prompt_words) < 5:
         add(
-            "short_prompt", "medium", "Very short question stem",
-            "The prompt may not provide enough context for a single clear interpretation.",
-            "Add the specific situation, relationship, or task the student should evaluate.",
+            "short_prompt", "medium", "The question is very short",
+            "With so few words, students may read the question in different ways.",
+            "Add a little detail so it's clear exactly what students should answer.",
         )
     if re.search(r"\b(?:not|except|least)\b", prompt, flags=re.IGNORECASE):
         add(
-            "negative_stem", "low", "Negative question wording",
-            "Negative stems can be misread and may measure attention more than understanding.",
-            "Prefer positive wording, or make the negative term visually explicit.",
+            "negative_stem", "low", "Uses \"not\", \"except\" or \"least\"",
+            "Students often miss these words, so a wrong answer may mean they misread rather than misunderstood.",
+            "Reword it positively, or make the word stand out, for example in bold.",
         )
     if topic_key not in known_topic_keys:
         add(
-            "unmapped_concept", "high", "Concept is outside the course map",
-            f"The question is labelled “{concept or 'Unspecified'}”, which does not match an approved course topic.",
-            "Map the question to an existing topic or add the missing topic to the course graph.",
+            "unmapped_concept", "high", "Not linked to one of your topics",
+            f"The question is about “{concept or 'no topic'}”, which isn't one of this course's topics.",
+            "Add this topic to the course in Settings, or move the question under an existing topic.",
         )
     elif topic_key not in supported_topic_keys:
         add(
-            "unsupported_concept", "high", "No mapped teaching material",
-            "The question targets a topic that has no clearly matched section in indexed course material.",
-            "Identify the supporting page or add material before using this assessment.",
+            "unsupported_concept", "high", "Not covered in your material",
+            "None of your uploaded material clearly covers this question's topic, so the tutor can't help students with it.",
+            "Upload material that teaches this topic before using the question.",
         )
     if len(options) >= 3:
         lengths = [len(option) for option in options if option]
         if lengths and max(lengths) >= max(40, median(lengths) * 3):
             add(
-                "length_cue", "low", "Answer-length cue",
-                "One option is substantially longer than the others and may reveal the intended answer.",
-                "Make answer choices similar in specificity and grammatical structure.",
+                "length_cue", "low", "One choice is much longer",
+                "When one choice is far longer than the rest, students can guess it's the right one.",
+                "Make the choices a similar length and level of detail.",
             )
     option_token_sets = [set(re.findall(r"[a-z0-9]+", option.lower())) for option in options]
     for left_index, left in enumerate(option_token_sets):
@@ -111,9 +158,9 @@ def assessment_issues(
             union = left | right
             if min(len(left), len(right)) >= 3 and union and len(left & right) / len(union) >= 0.8:
                 add(
-                    "overlapping_options", "medium", "Highly overlapping answer options",
-                    "Two answer choices use nearly the same meaning or wording.",
-                    "Clarify the distinction so only one option is defensibly correct.",
+                    "overlapping_options", "medium", "Two choices are almost the same",
+                    "Two answer choices use nearly the same words or meaning.",
+                    "Make the difference clear so only one choice is right.",
                 )
                 return issues
     return issues
@@ -180,11 +227,11 @@ def simulated_learner_profiles(topic_rows: list[dict]) -> list[dict]:
         has_material = bool(row.get("material_sources"))
         questions = int(row.get("assessment_questions") or 0)
         if has_material and questions:
-            experience = "Grounded study material and a focused assessment are available."
+            experience = "Covered in your material, with quiz questions to check it."
         elif has_material:
-            experience = "Grounded study material is available, but no aligned assessment checks it yet."
+            experience = "Covered in your material, but no quiz questions check it yet."
         else:
-            experience = "Grounded support is limited until teaching material is mapped to this concept."
+            experience = "Not covered in your material yet, so the tutor can't help much here."
         return {
             "topic": name,
             "has_material": has_material,
@@ -213,8 +260,8 @@ def simulated_learner_profiles(topic_rows: list[dict]) -> list[dict]:
     scenarios = [
         {
             "id": "starting-fresh",
-            "label": "Starting fresh",
-            "summary": "Assumes no prior course concepts are mastered.",
+            "label": "Starting from scratch",
+            "summary": "A student who doesn't know any of the topics yet.",
             "assumed_mastered": [],
             "recommended_path": fresh_path,
             "at_risk_topics": [],
@@ -222,8 +269,8 @@ def simulated_learner_profiles(topic_rows: list[dict]) -> list[dict]:
         },
         {
             "id": "missing-prerequisite",
-            "label": "Missing a prerequisite",
-            "summary": f"Assumes the learner needs support with {weak_name}, the concept with the widest downstream effect.",
+            "label": f"Weak on {weak_name}",
+            "summary": f"A student who struggles with {weak_name}. More topics build on it than on any other.",
             "assumed_mastered": sorted(weak_mastered),
             "recommended_path": weak_path,
             "at_risk_topics": descendants(weak_name),
@@ -231,8 +278,8 @@ def simulated_learner_profiles(topic_rows: list[dict]) -> list[dict]:
         },
         {
             "id": "ready-to-progress",
-            "label": "Ready to progress",
-            "summary": "Assumes well-supported prerequisite concepts are already mastered.",
+            "label": "Knows the basics",
+            "summary": "A student who already understands the topics your course covers well.",
             "assumed_mastered": sorted(ready_mastered),
             "recommended_path": ready_path,
             "at_risk_topics": [],
@@ -244,13 +291,13 @@ def simulated_learner_profiles(topic_rows: list[dict]) -> list[dict]:
         focus = scenario["next_steps"][0] if scenario["next_steps"] else None
         checks: list[str] = []
         if focus:
-            checks.append(f"Ask the learner to explain {focus['topic']} before moving downstream.")
+            checks.append(f"Ask the student to explain {focus['topic']} in their own words before moving on.")
             if not focus["has_material"]:
-                checks.append("Add mapped teaching material before relying on grounded tutoring.")
+                checks.append("Upload material for this topic so the tutor can help with it.")
             if not focus["assessment_questions"]:
-                checks.append("Add or generate a focused question to verify this step.")
+                checks.append("Add a quiz question that checks this topic.")
         else:
-            checks.append("Use a transfer question or spaced review to confirm retained understanding.")
+            checks.append("Come back to these topics in a week or two to check they've stuck.")
         scenario["teacher_checks"] = checks
     return scenarios
 
@@ -289,7 +336,7 @@ async def course_digital_twin(
         )
         mastery_response = await client.get(
             f"{base}/rest/v1/student_concept_mastery", headers=headers,
-            params={"course_id": f"eq.{course_id_string}", "select": "concept,mastery_score,total_answers,completed_teach_backs"},
+            params={"course_id": f"eq.{course_id_string}", "select": "student_id,concept,mastery_score,total_answers,completed_teach_backs"},
         )
         for response in (
             topics_response, materials_response, chunks_response, links_response,
@@ -320,12 +367,18 @@ async def course_digital_twin(
             attempts = attempts_response.json()
 
     material_by_id = {row["id"]: row for row in materials}
+    topic_names = [row["name"] for row in topics]
+
+    def resolved_key(concept: str) -> str:
+        matched = match_topic(concept, topic_names)
+        return concept_key(matched) if matched else concept_key(concept)
+
     question_counts: dict[str, int] = defaultdict(int)
     for question in questions:
-        question_counts[concept_key(question["concept"])] += 1
+        question_counts[resolved_key(question["concept"])] += 1
     mastery_rows: dict[str, list[dict]] = defaultdict(list)
     for row in mastery_response.json():
-        mastery_rows[concept_key(row["concept"])].append(row)
+        mastery_rows[resolved_key(row["concept"])].append(row)
     incoming: dict[str, list[str]] = defaultdict(list)
     outgoing: dict[str, list[str]] = defaultdict(list)
     topic_name_by_id = {row["id"]: row["name"] for row in topics}
@@ -363,14 +416,7 @@ async def course_digital_twin(
             })
         assessment_count = question_counts.get(concept_key(topic["name"]), 0)
         evidence = mastery_rows.get(concept_key(topic["name"]), [])
-        evidence_students = sum(
-            int(row.get("total_answers") or 0) > 0 or int(row.get("completed_teach_backs") or 0) > 0
-            for row in evidence
-        )
-        average_mastery = (
-            round(sum(float(row["mastery_score"]) for row in evidence) / len(evidence))
-            if evidence else None
-        )
+        evidence_students, average_mastery = topic_evidence(evidence)
         prerequisite_names = incoming.get(topic["id"], [])
         unlocks = outgoing.get(topic["id"], [])
         connected = bool(prerequisite_names or unlocks) or len(topics) <= 1
@@ -378,20 +424,20 @@ async def course_digital_twin(
         if not matches:
             gaps.append({
                 "topic": topic["name"], "severity": "high", "kind": "material",
-                "message": "No indexed material section clearly covers this course topic.",
-                "recommendation": "Upload or identify a course section that teaches this concept.",
+                "message": "None of your uploaded material clearly covers this topic.",
+                "recommendation": "Upload the notes or slides you use to teach it.",
             })
         if assessment_count == 0:
             gaps.append({
                 "topic": topic["name"], "severity": "medium", "kind": "assessment",
-                "message": "No generated or teacher-created quiz question currently assesses this topic.",
-                "recommendation": "Generate a focused quiz or add an assessment item for this concept.",
+                "message": "No quiz questions check this topic yet.",
+                "recommendation": "Create a quiz that includes this topic.",
             })
         if not connected:
             gaps.append({
                 "topic": topic["name"], "severity": "low", "kind": "prerequisite",
-                "message": "This topic is isolated from the prerequisite graph.",
-                "recommendation": "Review whether it requires or unlocks another course concept.",
+                "message": "This topic isn't linked to any other topic.",
+                "recommendation": "In Settings, say which topics it builds on or leads to.",
             })
         topic_rows.append({
             "id": topic["id"], "name": topic["name"], "weight": topic["weight"],
@@ -404,8 +450,8 @@ async def course_digital_twin(
     if not topics:
         gaps.append({
             "topic": None, "severity": "high", "kind": "structure",
-            "message": "The course has no defined concept map.",
-            "recommendation": "Create course topics or use AI-assisted graph suggestions in Settings.",
+            "message": "This course doesn't have any topics yet.",
+            "recommendation": "Add your topics in Settings, or let EduBridge suggest them from your material.",
         })
     material_rows = [{
         "id": material["id"], "title": material["title"], "status": material["status"],
@@ -425,7 +471,7 @@ async def course_digital_twin(
     question_audit: list[dict] = []
     issue_counts: dict[str, int] = defaultdict(int)
     for question in questions:
-        issues = assessment_issues(question, known_topic_keys, supported_topic_keys)
+        issues = assessment_issues(question, known_topic_keys, supported_topic_keys, resolved_key(question["concept"]))
         if not issues:
             continue
         for issue in issues:
