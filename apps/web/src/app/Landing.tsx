@@ -22,6 +22,70 @@ const TEACHER_SIDE = [
   { title: "Check your course is ready", body: "Which topics your material covers, which have quiz questions, and what to add next." },
 ];
 
+type Photo = { id: string; alt: string; credit: string; profile: string; page: string; position: string; tone: string };
+
+// Free-licence Unsplash photos, loaded from Unsplash's own image server as their licence allows.
+const PHOTOS: Record<"student" | "teacher", Photo> = {
+  student: {
+    id: "photo-1639300505533-9921527d6a50",
+    alt: "A student writing at a desk in a dark room, lit by a single desk lamp",
+    credit: "Kevin Yudhistira Alloni",
+    profile: "https://unsplash.com/@kyalloni",
+    page: "https://unsplash.com/photos/WBU233kGI6g",
+    position: "50% 66%",
+    tone: "brightness(1.08) contrast(1.04)",
+  },
+  teacher: {
+    id: "photo-1758270704296-a59b8f4e7dda",
+    alt: "A lecturer, seen from behind, facing a class of students taking notes",
+    credit: "Vitaly Gariev",
+    profile: "https://unsplash.com/@silverkblack",
+    page: "https://unsplash.com/photos/uk8i6pZ_qUM",
+    position: "40% 50%",
+    tone: "saturate(0.55) brightness(0.72) contrast(1.08) sepia(0.14)",
+  },
+};
+
+const photoUrl = (id: string, width: number) =>
+  `https://images.unsplash.com/${id}?auto=format&fit=crop&w=${width}&h=${Math.round(width / 1.5)}&q=70`;
+
+function ColumnPhoto({ photo }: { photo: Photo }) {
+  return (
+    <figure className="m-0 flex flex-col gap-2">
+      <div className="eb-photo relative aspect-[3/2] overflow-hidden rounded-2xl">
+        <img
+          src={photoUrl(photo.id, 960)}
+          srcSet={[640, 960, 1440].map(width => `${photoUrl(photo.id, width)} ${width}w`).join(", ")}
+          sizes="(min-width: 768px) 540px, 100vw"
+          width={960}
+          height={640}
+          alt={photo.alt}
+          loading="lazy"
+          decoding="async"
+          className="h-full w-full object-cover"
+          style={{ objectPosition: photo.position, filter: photo.tone }}
+        />
+      </div>
+      <figcaption className="text-[13px] text-[var(--eb-text-muted)]">
+        Photo by <a href={photo.profile} target="_blank" rel="noreferrer" className="underline decoration-[var(--eb-line)] underline-offset-2 hover:text-[var(--eb-text)]">{photo.credit}</a> on{" "}
+        <a href={photo.page} target="_blank" rel="noreferrer" className="underline decoration-[var(--eb-line)] underline-offset-2 hover:text-[var(--eb-text)]">Unsplash</a>
+      </figcaption>
+    </figure>
+  );
+}
+
+const SCREENS = [
+  {
+    who: "For students",
+    title: "See which step slips, and why",
+    body: "A student uploads their working on attention. Each step is checked against the course; step 6 needs another look, and the slide it relies on opens beside it with the line lit.",
+    src: "/landing/show-your-work.webp",
+    width: 1393,
+    height: 802,
+    alt: "Show Your Work feedback. Step 5 holds up; step 6 needs another look because transformers don't read words one at a time. Beside it, page 14 of the Transformers slides is open with the matching line highlighted.",
+  },
+];
+
 const STEPS: { who: string; steps: string[] }[] = [
   { who: "If you teach", steps: [
     "Create a course and get a join code for your students.",
@@ -105,8 +169,9 @@ export default function Landing({ onNavigate }: { onNavigate: (view: "auth", rol
         <div className="mx-auto flex max-w-6xl flex-col gap-10 px-6 py-20">
           <h2 id="what" className="m-0 max-w-[24ch] text-[32px] font-semibold leading-tight tracking-[-0.02em]">One course, two sides of the same page.</h2>
           <div className="grid gap-12 md:grid-cols-2">
-            {[{ who: "For students", items: STUDENT_SIDE }, { who: "For teachers", items: TEACHER_SIDE }].map(column => (
+            {[{ who: "For students", items: STUDENT_SIDE, photo: PHOTOS.student }, { who: "For teachers", items: TEACHER_SIDE, photo: PHOTOS.teacher }].map(column => (
               <div key={column.who} className="flex flex-col gap-6">
+                <ColumnPhoto photo={column.photo} />
                 <span className="text-[15px] text-[var(--eb-text-muted)]">{column.who}</span>
                 <ul className="m-0 flex list-none flex-col gap-6 p-0">
                   {column.items.map(item => (
@@ -119,6 +184,27 @@ export default function Landing({ onNavigate }: { onNavigate: (view: "auth", rol
               </div>
             ))}
           </div>
+        </div>
+      </section>
+
+      <section aria-labelledby="screens" className="border-t border-[var(--eb-line-soft)]">
+        <div className="mx-auto flex max-w-6xl flex-col gap-14 px-6 py-20">
+          <div className="flex max-w-[60ch] flex-col gap-3">
+            <h2 id="screens" className="m-0 text-[32px] font-semibold leading-tight tracking-[-0.02em]">Screens from a real course</h2>
+            <p className="m-0 text-[17px] leading-relaxed text-[var(--eb-text-soft)]">A university course on transformers, built from the lecturer’s own slides. The feedback and the lit lines are exactly what EduBridge produced.</p>
+          </div>
+          {SCREENS.map((screen, index) => (
+            <figure key={screen.src} className="m-0 grid items-center gap-8 lg:grid-cols-[minmax(0,1.5fr)_minmax(0,1fr)] lg:gap-14">
+              <div className={`eb-shot ${index % 2 ? "lg:order-2" : ""}`}>
+                <img src={screen.src} width={screen.width} height={screen.height} alt={screen.alt} loading="lazy" decoding="async" className="block h-auto w-full" />
+              </div>
+              <figcaption className={`flex flex-col gap-3 ${index % 2 ? "lg:order-1" : ""}`}>
+                <span className="text-[15px] text-[var(--eb-text-muted)]">{screen.who}</span>
+                <span className="text-[24px] font-semibold leading-snug tracking-[-0.01em]">{screen.title}</span>
+                <span className="max-w-[46ch] text-[16px] leading-relaxed text-[var(--eb-text-soft)]">{screen.body}</span>
+              </figcaption>
+            </figure>
+          ))}
         </div>
       </section>
 

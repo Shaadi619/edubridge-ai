@@ -37,6 +37,12 @@ function reviewNote(status: WorkSubmission["review_status"]) {
   return "This is a suggestion only. It doesn’t change your progress.";
 }
 
+// Model labels arrive as "sequential-processing misconception"; show "sequential processing".
+function gapName(value: string) {
+  const cleaned = value.replace(/[_-]+/g, " ").replace(/\s+(misconceptions?|misunderstandings?|errors?)$/i, "").trim();
+  return cleaned || value;
+}
+
 export default function WorkStage({ courseId, courseName, accessToken }: {
   courseId: string; courseName: string; accessToken: string;
 }) {
@@ -243,7 +249,7 @@ export default function WorkStage({ courseId, courseName, accessToken }: {
 
                 {analysis.misconception.detected && (
                   <div className="flex flex-col gap-1.5 rounded-xl border border-[var(--eb-line)] bg-[var(--eb-raised-2)] px-4 py-3">
-                    <span className="font-semibold">Possible gap: {analysis.misconception.concept || analysis.misconception.label}</span>
+                    <span className="font-semibold">Possible gap: {gapName(analysis.misconception.concept || analysis.misconception.label || "")}</span>
                     {analysis.misconception.explanation && <p className="m-0 text-[15px] leading-relaxed text-[var(--eb-text-soft)]">{analysis.misconception.explanation}</p>}
                     <span className="text-sm text-[var(--eb-text-muted)]">{reviewNote(selected.review_status)}</span>
                   </div>

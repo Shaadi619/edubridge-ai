@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useMemo, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { ArrowUpRight } from "lucide-react";
 
 import type { SourceCitation } from "../../lib/api";
@@ -107,6 +107,19 @@ export default function SourceStage({ courseId, items, activeKey, onPick, hoverK
       : []
   ), [excerpt, active]);
   const hasLit = spans.some(span => span.lit);
+  const paperRef = useRef<HTMLElement | null>(null);
+  // Bring the lit line into view: on a long page it can sit below the fold.
+  useEffect(() => {
+    const paper = paperRef.current;
+    if (!paper || !hasLit) return;
+    const frame = requestAnimationFrame(() => {
+      const lit = paper.querySelector<HTMLElement>(".eb-lit");
+      if (!lit) return;
+      const offset = lit.getBoundingClientRect().top - paper.getBoundingClientRect().top + paper.scrollTop;
+      paper.scrollTop = Math.max(0, offset - paper.clientHeight / 3);
+    });
+    return () => cancelAnimationFrame(frame);
+  }, [spans, hasLit]);
   const glowing = hoverKey !== null && hoverKey === activeKey;
   const location = active ? frameLabel(active.citation) : null;
   // One frame per page: two passages from the same page share it, and pages
@@ -171,6 +184,7 @@ export default function SourceStage({ courseId, items, activeKey, onPick, hoverK
 
       <article
         key={active?.key ?? "empty"}
+        ref={paperRef}
         aria-label={active ? `Excerpt from ${shortTitle(active.citation.document_title)}${location ? `, ${location}` : ""}` : "No excerpt selected"}
         tabIndex={active ? 0 : -1}
         className="eb-paper relative z-[1] min-h-[260px] flex-1 overflow-y-auto px-7 py-8 sm:px-10 sm:py-9"

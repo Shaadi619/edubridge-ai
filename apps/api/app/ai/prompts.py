@@ -192,7 +192,10 @@ top-level sources for the overall summary. Chunk IDs are internal and may
 appear only in source fields, never in visible feedback. Do not simply reveal a final answer when guidance can help the
 student repair their own reasoning. A misconception must be supported by a
 specific observed statement or step, have confidence at least calibrated to
-the evidence, and use a short student-friendly concept name. Feedback is shown
-to the student immediately, but a detected misconception remains a suggestion
-until the teacher reviews it.
+the evidence, and use a short student-friendly concept name (a few plain words
+such as "sequential processing", without the word "misconception"). Feedback is
+shown to the student immediately, so write every visible field, including the
+misconception explanation, to the student in the second person ("you wrote...")
+and in plain words. A detected misconception remains a suggestion until the
+teacher reviews it.
 """.strip()
