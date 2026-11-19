@@ -109,6 +109,22 @@ export default function SourceStage({ courseId, items, activeKey, onPick, hoverK
   const hasLit = spans.some(span => span.lit);
   const glowing = hoverKey !== null && hoverKey === activeKey;
   const location = active ? frameLabel(active.citation) : null;
+  // One frame per page: two passages from the same page share it, and pages
+  // from different documents that would read the same get the document name.
+  const frames = useMemo(() => {
+    const byPage = new Map<string, { items: StageCitation[]; clashes: boolean }>();
+    items.forEach(item => {
+      const id = `${item.citation.document_title ?? ""}\u0000${frameLabel(item.citation)}`;
+      const frame = byPage.get(id);
+      if (frame) frame.items.push(item);
+      else byPage.set(id, { items: [item], clashes: false });
+    });
+    const list = [...byPage.values()];
+    const labels = new Map<string, number>();
+    list.forEach(frame => labels.set(frameLabel(frame.items[0].citation), (labels.get(frameLabel(frame.items[0].citation)) ?? 0) + 1));
+    list.forEach(frame => { frame.clashes = (labels.get(frameLabel(frame.items[0].citation)) ?? 0) > 1; });
+    return list;
+  }, [items]);
 
   return (
     <div className={`eb-source flex h-full min-h-0 w-full flex-col gap-5 px-6 py-6 sm:px-8 sm:py-7${searching ? " is-searching" : ""}${!active ? " is-quiet" : ""}`}>
@@ -214,10 +230,11 @@ export default function SourceStage({ courseId, items, activeKey, onPick, hoverK
             {searching ? "Searching your course material" : (stripCaption ?? "Pages this conversation cites")}
           </span>
           <div role="group" aria-label="Cited pages" className="flex gap-3.5 overflow-x-auto pb-1">
-            {items.map((item, index) => {
-              const on = item.key === activeKey && !searching;
+            {frames.map((frame, index) => {
+              const item = frame.items[0];
+              const on = frame.items.some(entry => entry.key === activeKey) && !searching;
               return (
-                <button key={item.key} type="button" onClick={() => onPick(item.key)} aria-pressed={on}
+                <button key={item.key} type="button" onClick={() => { if (!on) onPick(item.key); }} aria-pressed={on}
                   aria-label={`Show ${frameLabel(item.citation)} of ${shortTitle(item.citation.document_title)}`}
                   className="flex shrink-0 flex-col items-start gap-2 text-left"
                 >
@@ -237,6 +254,9 @@ export default function SourceStage({ courseId, items, activeKey, onPick, hoverK
                   <span className={`max-w-[104px] truncate text-[13px] ${on ? "font-semibold text-[var(--eb-text)]" : "text-[var(--eb-text-muted)]"}`}>
                     {frameLabel(item.citation)}
                   </span>
+                  {frame.clashes && (
+                    <span className="-mt-1.5 max-w-[104px] truncate text-[12px] text-[var(--eb-text-muted)]">{shortTitle(item.citation.document_title)}</span>
+                  )}
                 </button>
               );
             })}

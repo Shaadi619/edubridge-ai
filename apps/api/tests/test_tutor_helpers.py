@@ -30,3 +30,9 @@ def test_visible_text_removes_bracketed_chunk_id_lists() -> None:
 def test_visible_text_removes_stray_ids_but_keeps_line_breaks() -> None:
     text = "1) Introduce the goal 65a97f14-96a2-4708-b61a-78b01d5cffd2.\n2) Pair work."
     assert _remove_internal_references(text) == "1) Introduce the goal.\n2) Pair work."
+
+
+def test_one_word_idea_matches_the_longer_title_that_contains_it() -> None:
+    assert _same_concept("Sequential processing", "Sequential vs. parallel processing in sequence models")
+    assert _same_concept("sequential-processing misconception", "Sequential vs. parallel processing in sequence models")
+    assert not _same_concept("Softmax scaling", "Sequential vs. parallel processing in sequence models")

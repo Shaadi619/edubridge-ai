@@ -20,7 +20,8 @@ from app.ai.prompts import SHOW_WORK_SYSTEM_PROMPT
 from app.auth import AuthenticatedUser, current_user
 from app.concepts import friendly_concept
 from app.config import Settings, get_settings
-from app.routers.tutor import _course_access, _source_kind
+from app.mastery import change_misconception_evidence
+from app.routers.tutor import _course_access, _same_concept, _source_kind
 
 router = APIRouter(prefix="/courses", tags=["show your work"])
 logger = logging.getLogger(__name__)
@@ -307,6 +308,58 @@ async def teacher_work_submissions(
         return [{**row, "student": names.get(row["student_id"], "Student")} for row in rows]
 
 
+async def _record_reviewed_misconception(
+    client: httpx.AsyncClient,
+    base: str,
+    headers: dict,
+    *,
+    course_id: str,
+    student_id: str,
+    reviewer_id: str,
+    concept: str,
+    analysis: dict,
+    misconception: dict,
+) -> str:
+    """Add an agreed upload to the student's record.
+
+    If the student already has a mistake on the same idea, count this as
+    another time it showed up rather than listing it twice.
+    """
+    label = misconception.get("label") or concept
+    now = datetime.now(UTC).isoformat()
+    details = {
+        "explanation": misconception.get("explanation") or analysis.get("summary") or "Misconception observed in submitted work.",
+        "student_evidence": misconception.get("evidence_from_student") or analysis.get("observed_work") or "Submitted work",
+        "confidence": misconception.get("confidence"),
+        "recommended_intervention": misconception.get("recommended_intervention") or analysis.get("next_step"),
+        "reviewed_by": reviewer_id,
+        "reviewed_at": now,
+    }
+    existing = await client.get(
+        f"{base}/rest/v1/misconceptions", headers=headers,
+        params={"course_id": f"eq.{course_id}", "student_id": f"eq.{student_id}", "status": "neq.dismissed",
+                "select": "id,concept,label,status,occurrence_count", "order": "created_at.desc"},
+    )
+    rows = existing.json() if existing.is_success else []
+    match = next((row for row in rows if _same_concept(row["concept"], concept) or _same_concept(row.get("label") or "", label)), None)
+    if match:
+        response = await client.patch(
+            f"{base}/rest/v1/misconceptions?id=eq.{match['id']}", headers=headers,
+            json={**details, "status": "open", "learning_status": "open", "verified_at": None,
+                  "occurrence_count": int(match.get("occurrence_count") or 1) + 1, "last_detected_at": now},
+        )
+        response.raise_for_status()
+        if match.get("status") != "open":
+            await change_misconception_evidence(client, base, headers, course_id=course_id, student_id=student_id, concept=match["concept"], delta=1)
+        return match["id"]
+    created = await client.post(f"{base}/rest/v1/misconceptions", headers=headers, json={
+        "course_id": course_id, "student_id": student_id, "concept": concept, "label": label, **details,
+    })
+    created.raise_for_status()
+    await change_misconception_evidence(client, base, headers, course_id=course_id, student_id=student_id, concept=concept, delta=1)
+    return created.json()[0]["id"]
+
+
 @router.patch("/teacher/{course_id}/work-submissions/{submission_id}/review")
 async def review_work_submission(
     course_id: UUID,
@@ -337,17 +390,11 @@ async def review_work_submission(
             concept = friendly_concept(misconception.get("concept") or misconception.get("label") or "")
             if not concept:
                 raise HTTPException(status_code=422, detail="The misconception suggestion has no usable concept")
-            created = await client.post(f"{base}/rest/v1/misconceptions", headers=headers, json={
-                "course_id": str(course_id), "student_id": submission["student_id"],
-                "concept": concept, "label": misconception.get("label") or concept,
-                "explanation": misconception.get("explanation") or analysis.get("summary") or "Misconception observed in submitted work.",
-                "student_evidence": misconception.get("evidence_from_student") or analysis.get("observed_work") or "Submitted work",
-                "confidence": misconception.get("confidence"),
-                "recommended_intervention": misconception.get("recommended_intervention") or analysis.get("next_step"),
-                "reviewed_by": user.id, "reviewed_at": datetime.now(UTC).isoformat(),
-            })
-            created.raise_for_status()
-            misconception_id = created.json()[0]["id"]
+            misconception_id = await _record_reviewed_misconception(
+                client, base, headers,
+                course_id=str(course_id), student_id=submission["student_id"], reviewer_id=user.id,
+                concept=concept, analysis=analysis, misconception=misconception,
+            )
         updated = await client.patch(
             f"{base}/rest/v1/work_submissions?id=eq.{submission_id}", headers=headers,
             json={"review_status": request.decision, "reviewed_by": user.id, "reviewed_at": datetime.now(UTC).isoformat(), "misconception_id": misconception_id},

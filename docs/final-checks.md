@@ -53,7 +53,9 @@ Things to verify by hand before the redesign branch is merged. Tick each one off
 - Fixed: the source panel scrolled away from long feedback, so a clicked citation lit a line off screen. It now stays in view (Show Your Work and Quiz).
 - Fixed: Settings showed "0 quizzes taken" before the count loaded.
 - Fixed: the join-code box had no proper name for screen readers.
-- Still open: the notifications panel uses the old light style; "Join a Course" appears both in the header and on the page; the page strip can show the same page twice.
+- Fixed: the notifications panel now matches the dark style, closes with Escape, and only shows filters that have something in them.
+- Fixed: page titles no longer repeat the header (Join a Course, Show Your Work, Settings).
+- Fixed: the page strip shows each page once, and names the document when two pages would read the same.
 
 ### Teacher side, second pass
 
@@ -64,4 +66,4 @@ Things to verify by hand before the redesign branch is merged. Tick each one off
 - Fixed: Analytics and the course summary didn't count an agreed upload until the page was reloaded.
 - Fixed: the upload quote showed doubled quotation marks.
 - Fixed: mistake titles like "sequential processing misconception" now read "Sequential processing".
-- Still open: an agreed upload adds a new mistake even when the student already has an open one on the same idea (here "Sequential vs. parallel processing").
+- Fixed: an agreed upload now counts as another time an existing mistake on the same idea showed up, instead of listing it twice. (The duplicate made during the checks is still there; mark one as dealt with.)

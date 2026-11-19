@@ -352,25 +352,31 @@ function NotificationsPanel({ open, onClose, notifications, setNotifications, on
     });
   };
 
+  useEffect(() => {
+    if (!open) return;
+    const onKey = (event: KeyboardEvent) => { if (event.key === "Escape") onClose(); };
+    window.addEventListener("keydown", onKey);
+    return () => window.removeEventListener("keydown", onKey);
+  }, [open, onClose]);
+
   const iconFor = (type: Notification["type"]) => {
-    if (type === "enroll") return <Users size={13} className="text-blue-500" />;
-    if (type === "flag") return <AlertCircle size={13} className="text-amber-500" />;
-    if (type === "misconception") return <Brain size={13} className="text-purple-500" />;
-    if (type === "announcement") return <Bell size={13} className="text-sky-500" />;
-    return <Target size={13} className="text-emerald-500" />;
+    if (type === "enroll") return <Users size={14} />;
+    if (type === "flag") return <AlertCircle size={14} />;
+    if (type === "misconception") return <Brain size={14} />;
+    if (type === "announcement") return <Bell size={14} />;
+    return <Target size={14} />;
   };
-  const bgFor = (type: Notification["type"]) => {
-    if (type === "enroll") return "bg-blue-50 border-blue-100";
-    if (type === "flag") return "bg-amber-50 border-amber-100";
-    if (type === "misconception") return "bg-purple-50 border-purple-100";
-    if (type === "announcement") return "bg-sky-50 border-sky-100";
-    return "bg-emerald-50 border-emerald-100";
-  };
+  // Amber is kept for things that need the teacher's eye; everything else stays quiet.
+  const toneFor = (type: Notification["type"]) => (
+    type === "flag" || type === "misconception"
+      ? "border-[rgba(240,185,74,0.35)] text-[var(--eb-light)]"
+      : "border-[var(--eb-line)] text-[var(--eb-text-muted)]"
+  );
 
   const FILTERS: { key: NotifFilter; label: string }[] = [
     { key: "all", label: "All" },
     { key: "unread", label: "Unread" },
-    { key: "enroll", label: "Enrollments" },
+    { key: "enroll", label: "Joining" },
     { key: "flags", label: "Flags" },
   ];
 
@@ -396,130 +402,96 @@ function NotificationsPanel({ open, onClose, notifications, setNotifications, on
   if (yesterdayItems.length) groups.push({ label: "Yesterday", items: yesterdayItems });
   if (earlierItems.length) groups.push({ label: "Earlier", items: earlierItems });
 
+  const counts: Record<NotifFilter, number> = {
+    all: notifications.length,
+    unread: unread,
+    enroll: notifications.filter(n => n.type === "enroll").length,
+    flags: notifications.filter(n => n.type === "flag" || n.type === "misconception").length,
+  };
+  const emptyText = filter === "all" ? "Nothing new. Updates from your courses will show up here."
+    : filter === "unread" ? "You’ve read everything."
+    : filter === "enroll" ? "Nothing about joining courses."
+    : "No flags.";
+
   return (
     <AnimatePresence>
       {open && (
         <>
           <div className="fixed inset-0 z-40" onClick={onClose} />
           <motion.div
-            initial={{ opacity: 0, x: 16, scale: 0.97 }}
-            animate={{ opacity: 1, x: 0, scale: 1 }}
-            exit={{ opacity: 0, x: 16, scale: 0.97 }}
-            transition={{ duration: 0.18, ease: "easeOut" }}
-            className="fixed top-16 right-4 z-50 w-[420px] bg-card border border-border rounded-2xl shadow-2xl overflow-hidden flex flex-col"
+            role="dialog"
+            aria-label="Notifications"
+            initial={{ opacity: 0, y: -6 }}
+            animate={{ opacity: 1, y: 0 }}
+            exit={{ opacity: 0, y: -6 }}
+            transition={{ duration: 0.16, ease: "easeOut" }}
+            className="eb-stage fixed right-4 top-16 z-50 flex w-[min(420px,calc(100vw-2rem))] flex-col overflow-hidden rounded-2xl border border-[var(--eb-line)] shadow-[0_24px_60px_rgba(0,0,0,0.45)]"
             style={{ maxHeight: "min(560px, calc(100vh - 80px))" }}
           >
-            {/* Header */}
-            <div className="px-5 py-4 border-b border-border flex items-center justify-between shrink-0">
-              <div className="flex items-center gap-2">
-                <h2 className="font-semibold text-foreground">Notifications</h2>
+            <div className="flex shrink-0 items-center justify-between gap-3 border-b border-[var(--eb-line-soft)] px-5 py-4">
+              <h2 className="m-0 text-[17px] font-semibold">
+                Notifications{unread > 0 && <span className="ml-2 text-[15px] font-normal text-[var(--eb-text-muted)]">{unread} unread</span>}
+              </h2>
+              <div className="flex items-center gap-1">
                 {unread > 0 && (
-                  <span className="text-xs font-bold bg-accent text-accent-foreground rounded-full px-1.5 py-0.5 min-w-[18px] text-center">{unread}</span>
-                )}
-              </div>
-              <div className="flex items-center gap-3">
-                {unread > 0 && (
-                  <button onClick={markAllRead} className="text-xs text-muted-foreground hover:text-foreground transition-colors font-medium">
+                  <button type="button" onClick={markAllRead} className="min-h-9 rounded-lg px-2.5 text-[14px] text-[var(--eb-text-soft)] hover:text-[var(--eb-text)]">
                     Mark all read
                   </button>
                 )}
-                <button onClick={onClose} className="p-1 hover:bg-muted rounded-lg transition-colors text-muted-foreground">
-                  <X size={15} />
+                <button type="button" onClick={onClose} aria-label="Close notifications" className="flex h-9 w-9 items-center justify-center rounded-lg text-[var(--eb-text-muted)] hover:bg-[var(--eb-raised)] hover:text-[var(--eb-text)]">
+                  <X size={16} />
                 </button>
               </div>
             </div>
 
-            {/* Filter tabs */}
-            <div className="px-5 py-2 border-b border-border flex gap-1 shrink-0">
-              {FILTERS.map(f => {
-                const count = f.key === "all" ? notifications.length
-                  : f.key === "unread" ? notifications.filter(n => !n.read).length
-                  : f.key === "enroll" ? notifications.filter(n => n.type === "enroll").length
-                  : notifications.filter(n => n.type === "flag" || n.type === "misconception").length;
-                return (
-                  <button key={f.key}
-                    onClick={() => setFilter(f.key)}
-                    className={`relative px-3 py-1.5 rounded-lg text-xs font-medium transition-colors ${
-                      filter === f.key
-                        ? "bg-primary text-primary-foreground"
-                        : "text-muted-foreground hover:bg-muted"
-                    }`}
-                  >
-                    {f.label}
-                    {count > 0 && f.key !== "all" && (
-                      <span className={`ml-1 text-[10px] font-bold px-1 rounded-full ${
-                        filter === f.key ? "bg-white/20 text-white" : "bg-muted text-muted-foreground"
-                      }`}>{count}</span>
-                    )}
-                  </button>
-                );
-              })}
+            <div role="tablist" aria-label="Show" className="flex shrink-0 gap-1 overflow-x-auto border-b border-[var(--eb-line-soft)] px-4 py-2">
+              {FILTERS.filter(f => f.key === "all" || f.key === "unread" || counts[f.key] > 0 || filter === f.key).map(f => (
+                <button key={f.key} type="button" role="tab" aria-selected={filter === f.key}
+                  onClick={() => setFilter(f.key)}
+                  className={`min-h-8 shrink-0 rounded-lg px-3 text-[13px] transition-colors ${
+                    filter === f.key ? "bg-[var(--eb-raised)] text-[var(--eb-text)]" : "text-[var(--eb-text-muted)] hover:text-[var(--eb-text)]"
+                  }`}>
+                  {f.label}{f.key !== "all" && counts[f.key] > 0 ? ` ${counts[f.key]}` : ""}
+                </button>
+              ))}
             </div>
 
-            {/* List */}
-            <div className="overflow-y-auto flex-1">
+            <div className="flex-1 overflow-y-auto">
               {filtered.length === 0 ? (
-                <div className="flex flex-col items-center justify-center py-14 px-6 text-center">
-                  <div className="w-12 h-12 rounded-2xl bg-muted flex items-center justify-center mb-3">
-                    <Bell size={20} className="text-muted-foreground/50" />
-                  </div>
-                  <p className="text-sm font-medium text-foreground mb-1">
-                    {filter === "all" ? "You're all caught up!" : `No ${filter === "unread" ? "unread" : filter === "enroll" ? "enrollment" : "flagged"} notifications`}
-                  </p>
-                  <p className="text-xs text-muted-foreground font-light">
-                    {filter === "all" ? "New alerts will appear here." : "Try switching to a different filter."}
-                  </p>
-                </div>
+                <p className="m-0 px-6 py-12 text-center text-[15px] text-[var(--eb-text-muted)]">{emptyText}</p>
               ) : (
-                groups.map((group, gi) => (
-                  <div key={group.label}>
-                    <div className="px-5 pt-3 pb-1.5">
-                      <span className="text-[10px] font-mono uppercase tracking-widest text-muted-foreground/60">{group.label}</span>
-                    </div>
+                groups.map(group => (
+                  <section key={group.label} aria-label={group.label}>
+                    <h3 className="m-0 px-5 pb-1 pt-4 text-[13px] font-medium text-[var(--eb-text-muted)]">{group.label}</h3>
                     <AnimatePresence initial={false}>
                       {group.items.map(n => (
                         <motion.div key={n.id} layout
                           exit={{ opacity: 0, height: 0, overflow: "hidden" }}
-                          transition={{ duration: 0.18 }}
-                          onClick={() => { markRead(n.id); onNavigate(n); onClose(); }}
-                          className={`flex gap-3 px-5 py-3.5 border-b border-border last:border-0 cursor-pointer hover:bg-muted/30 transition-colors group ${!n.read ? "bg-accent/5" : ""}`}
+                          transition={{ duration: 0.16 }}
+                          className="group relative flex gap-3 px-5 py-3 transition-colors hover:bg-[var(--eb-raised-2)]"
                         >
-                          <div className={`w-8 h-8 rounded-xl border ${bgFor(n.type)} flex items-center justify-center shrink-0 mt-0.5`}>
+                          <span aria-hidden="true" className={`mt-0.5 flex h-8 w-8 shrink-0 items-center justify-center rounded-full border ${toneFor(n.type)}`}>
                             {iconFor(n.type)}
-                          </div>
-                          <div className="flex-1 min-w-0">
-                            <div className="flex items-start justify-between gap-1 mb-0.5">
-                              <span className={`text-sm font-medium leading-snug ${!n.read ? "text-foreground" : "text-muted-foreground"}`}>
-                                {n.title}
-                              </span>
-                              <div className="flex items-center gap-1.5 shrink-0">
-                                {!n.read && <div className="w-1.5 h-1.5 rounded-full bg-accent mt-1" />}
-                                <button
-                                  onClick={e => { e.stopPropagation(); dismiss(n.id); }}
-                                  className="p-0.5 rounded opacity-0 group-hover:opacity-100 transition-opacity hover:bg-muted text-muted-foreground"
-                                >
-                                  <X size={11} />
-                                </button>
-                              </div>
-                            </div>
-                            <p className="text-xs text-muted-foreground font-light leading-relaxed">{n.body}</p>
-                            <div className="flex items-center mt-1.5">
-                              <span className="text-[10px] text-muted-foreground/60 font-mono">{n.time}</span>
-                            </div>
-                          </div>
+                          </span>
+                          <button type="button" onClick={() => { markRead(n.id); onNavigate(n); onClose(); }}
+                            className="flex min-w-0 flex-1 flex-col gap-0.5 pr-7 text-left after:absolute after:inset-0">
+                            <span className={`text-[15px] leading-snug ${n.read ? "text-[var(--eb-text-soft)]" : "font-semibold text-[var(--eb-text)]"}`}>
+                              {!n.read && <span className="sr-only">Unread: </span>}{n.title}
+                            </span>
+                            <span className="text-[14px] leading-relaxed text-[var(--eb-text-muted)]">{n.body}</span>
+                            <span className="text-[13px] text-[var(--eb-text-muted)]">{n.time}</span>
+                          </button>
+                          {!n.read && <span aria-hidden="true" className="absolute right-5 top-4 h-2 w-2 rounded-full bg-[var(--eb-light)] group-hover:opacity-0 group-focus-within:opacity-0" />}
+                          <button type="button" onClick={() => dismiss(n.id)} aria-label={`Dismiss ${n.title}`}
+                            className="absolute right-3 top-2.5 z-[1] flex h-7 w-7 items-center justify-center rounded-md text-[var(--eb-text-muted)] opacity-0 transition-opacity hover:bg-[var(--eb-raised)] hover:text-[var(--eb-text)] focus:opacity-100 group-hover:opacity-100">
+                            <X size={13} />
+                          </button>
                         </motion.div>
                       ))}
                     </AnimatePresence>
-                    {gi < groups.length - 1 && <div className="h-px bg-border mx-5 my-1" />}
-                  </div>
+                  </section>
                 ))
               )}
-            </div>
-
-            <div className="px-5 py-3 border-t border-border bg-muted/30 shrink-0">
-              <p className="text-xs text-muted-foreground font-light text-center">
-                Select a notification to open its related record.
-              </p>
             </div>
           </motion.div>
         </>
@@ -527,6 +499,7 @@ function NotificationsPanel({ open, onClose, notifications, setNotifications, on
     </AnimatePresence>
   );
 }
+
 
 // ─── Auth ─────────────────────────────────────────────────────────────────
 
@@ -2319,7 +2292,7 @@ function StudentSettings({ courses, darkMode, setDarkMode }: { courses: StudentC
   return <div className="eb-stage min-h-[calc(100vh-3.5rem)] px-5 py-10 sm:px-10">
     <div className="mx-auto flex max-w-[640px] flex-col gap-10">
       <div className="flex flex-col gap-2">
-        <h2 className="m-0 text-[28px] font-semibold tracking-[-0.02em]">Settings</h2>
+        <h2 className="m-0 text-[28px] font-semibold tracking-[-0.02em]">Your account</h2>
         <p className="m-0 text-[16px] text-[var(--eb-text-soft)]">Your profile and how quizzes work for you.</p>
       </div>
 

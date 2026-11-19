@@ -91,8 +91,8 @@ export default function JoinStage({ courses }: { courses: StudentCourse[] }) {
     <div className="eb-stage min-h-[calc(100vh-3.5rem)] px-5 py-10 sm:px-10">
       <div className="mx-auto flex max-w-[600px] flex-col gap-10">
         <div className="flex flex-col gap-2">
-          <h2 className="m-0 text-[28px] font-semibold tracking-[-0.02em]">Join a course</h2>
-          <p className="m-0 text-[16px] leading-relaxed text-[var(--eb-text-soft)]">Enter the join code your teacher gave you. They’ll get a request and let you in.</p>
+          <h2 className="m-0 text-[28px] font-semibold tracking-[-0.02em]">Enter your join code</h2>
+          <p className="m-0 text-[16px] leading-relaxed text-[var(--eb-text-soft)]">Your teacher gives each course a short code. Once you enter it, they get a request and let you in.</p>
         </div>
 
         <form className="flex flex-col gap-4" onSubmit={event => { event.preventDefault(); void find(); }}>

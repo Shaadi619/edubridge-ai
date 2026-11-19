@@ -249,14 +249,19 @@ def _normalized(value: str) -> str:
 
 def _same_concept(left: str, right: str) -> bool:
     def tokens(value: str) -> set[str]:
-        ignored = {"and", "or", "the", "a", "an", "of", "vs", "versus", "processing", "concept"}
+        ignored = {
+            "and", "or", "the", "a", "an", "of", "in", "to", "for", "with", "vs", "versus",
+            "processing", "concept", "misconception", "misconceptions", "misunderstanding", "misunderstandings",
+        }
         return {token.removesuffix("s") for token in re.findall(r"[a-z0-9]+", value.lower()) if token not in ignored}
 
     left_tokens, right_tokens = tokens(left), tokens(right)
     if not left_tokens or not right_tokens:
         return _normalized(left) == _normalized(right)
     overlap = len(left_tokens & right_tokens)
-    return overlap >= 2 and overlap / min(len(left_tokens), len(right_tokens)) >= 0.6
+    smaller = min(len(left_tokens), len(right_tokens))
+    # A one-word idea ("sequential") matches a longer title that contains it.
+    return overlap >= min(2, smaller) and overlap / smaller >= 0.6
 
 
 async def _persist_misconception(

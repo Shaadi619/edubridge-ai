@@ -120,7 +120,7 @@ export default function WorkStage({ courseId, courseName, accessToken }: {
     <div className="eb-stage grid min-h-[calc(100vh-3.5rem)] lg:grid-cols-[minmax(0,1fr)_minmax(380px,42%)]">
       <section aria-label="Your work" className="flex min-w-0 flex-col gap-8 px-5 py-8 sm:px-10">
         <div className="flex max-w-[640px] flex-col gap-2">
-          <h2 className="m-0 text-[28px] font-semibold leading-tight tracking-[-0.02em]">Show your work</h2>
+          <h2 className="m-0 text-[28px] font-semibold leading-tight tracking-[-0.02em]">Get feedback on your working</h2>
           <p className="m-0 text-[16px] leading-relaxed text-[var(--eb-text-soft)]">
             Upload a photo or PDF of your working for {courseName}. Each step is checked against your course material, and any correction points to the line in your notes it relies on.
           </p>
