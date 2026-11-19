@@ -6,6 +6,12 @@ export type ApiHealth = {
   environment: string;
 };
 
+export type QuizReceipt = {
+  attempt_id: string; score: number; correct: number; total: number;
+  assignment_completed: boolean; confidence_gaps: number;
+  outcomes?: Array<{ question_id: string; is_correct: boolean; confidence: number | null }> | null;
+};
+
 export type CourseGraphCitation = {
   document_title: string;
   page_number: number | null;
@@ -308,7 +314,7 @@ export const api = {
       `/courses/${courseId}/quizzes/take-waiting`, { method: "POST" }, accessToken,
     ),
   submitQuiz: (courseId: string, quizId: string, answers: Array<number | null>, confidences: Array<number | null>, accessToken: string) =>
-    request<{ attempt_id: string; score: number; correct: number; total: number; assignment_completed: boolean; confidence_gaps: number }>(
+    request<QuizReceipt>(
       `/courses/${courseId}/quizzes/${quizId}/submit`,
       { method: "POST", body: JSON.stringify({ answers, confidences }) },
       accessToken,

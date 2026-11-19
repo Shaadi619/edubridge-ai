@@ -1,4 +1,4 @@
-import type { api } from "./api";
+import type { api, QuizReceipt } from "./api";
 
 type GeneratedQuiz = Awaited<ReturnType<typeof api.generateQuiz>>;
 
@@ -11,6 +11,7 @@ export type QuizDraft = {
   selectedConfidence: number | null;
   showExplanation: boolean;
   showResults: boolean;
+  receipt?: QuizReceipt | null;
 };
 
 const PREFIX = "edubridge:study:v1:";

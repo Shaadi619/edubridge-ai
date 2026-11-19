@@ -1435,14 +1435,28 @@ async def submit_quiz(
                     "p_confidences": request.confidences,
                 },
             )
+            if result.is_success:
+                receipt = result.json()
+                # Use only the attempt ID returned by the ownership-checked RPC.
+                # The request's own answers may belong to a losing tab.
+                receipt["outcomes"] = None
+                try:
+                    rows = await client.get(
+                        f"{base}/rest/v1/quiz_answers",
+                        headers={"apikey": key, "Authorization": f"Bearer {key}"},
+                        params={"attempt_id": f"eq.{receipt['attempt_id']}",
+                                "select": "question_id,is_correct,confidence"},
+                    )
+                    if rows.is_success:
+                        receipt["outcomes"] = rows.json()
+                except httpx.RequestError:
+                    logger.warning("Quiz review unavailable after confirmed submission")
+                return receipt
         except httpx.RequestError as error:
             logger.warning("Quiz submission database request failed (%s)", type(error).__name__)
             raise HTTPException(
                 status_code=503, detail="Quiz submission could not be confirmed. Try again.",
             ) from error
-
-    if result.is_success:
-        return result.json()
 
     try:
         error_payload = result.json()
