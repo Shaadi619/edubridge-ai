@@ -32,22 +32,41 @@ def submission(monkeypatch):
     }
 
 
-def test_submit_returns_database_result_with_one_request(submission) -> None:
+def test_replay_returns_committed_grade_and_answers_not_this_tabs_choices(submission) -> None:
     client, submit, payload = submission
     result = {
         "attempt_id": str(uuid4()), "score": 50, "correct": 1, "total": 2,
         "assignment_completed": True, "confidence_gaps": 0,
     }
     client.post.return_value = httpx.Response(200, json=result)
+    rows = [{"question_id": str(uuid4()), "is_correct": False, "confidence": 1},
+            {"question_id": str(uuid4()), "is_correct": True, "confidence": 3}]
+    client.get.return_value = httpx.Response(200, json=rows)
 
-    assert submit() == result
+    assert submit() == dict(result, outcomes=rows)
     client.post.assert_awaited_once_with(
         "https://example.com/rest/v1/rpc/submit_quiz_once",
         headers={"apikey": "test", "Authorization": "Bearer test"},
         json=payload,
     )
-    client.get.assert_not_awaited()
+    client.get.assert_awaited_once_with(
+        "https://example.com/rest/v1/quiz_answers",
+        headers={"apikey": "test", "Authorization": "Bearer test"},
+        params={"attempt_id": f"eq.{result['attempt_id']}", "select": "question_id,is_correct,confidence"},
+    )
     client.patch.assert_not_awaited()
+
+
+@pytest.mark.parametrize("timeout", [True, False])
+def test_detail_failure_does_not_invalidate_saved_grade(submission, timeout):
+    client, submit, _ = submission
+    result = {"attempt_id": str(uuid4()), "score": 50, "correct": 1, "total": 2}
+    client.post.return_value = httpx.Response(200, json=result)
+    if timeout:
+        client.get.side_effect = httpx.ReadTimeout("timeout")
+    else:
+        client.get.return_value = httpx.Response(503)
+    assert submit() == dict(result, outcomes=None)
 
 
 @pytest.mark.parametrize(("code", "expected_status"), [
@@ -61,6 +80,7 @@ def test_submission_maps_database_errors(submission, code, expected_status) -> N
         submit()
 
     assert error.value.status_code == expected_status
+    client.get.assert_not_awaited()
     assert ("Database message" in error.value.detail) == (expected_status < 500)
 
 
