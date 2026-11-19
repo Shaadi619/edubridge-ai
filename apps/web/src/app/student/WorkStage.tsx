@@ -283,7 +283,8 @@ export default function WorkStage({ courseId, courseName, accessToken }: {
         )}
       </section>
 
-      <aside aria-label="Course source" className="min-h-[420px] border-t border-[#26313D] lg:border-l lg:border-t-0">
+      <aside aria-label="Course source"
+        className={`min-h-[420px] border-t border-[#26313D] lg:block lg:border-l lg:border-t-0 ${stageItems.length ? "" : "hidden"}`}>
         <SourceStage
           courseId={courseId}
           items={stageItems}
@@ -296,6 +297,8 @@ export default function WorkStage({ courseId, courseName, accessToken }: {
             ? "None of this feedback was matched to a passage you can open."
             : "When a step needs fixing, the line in your notes it relies on appears here."}
           stripCaption="Pages this feedback relies on"
+          idleCaption="The page behind each correction appears here"
+          emptyHint="The exact line is lit, so you can check the feedback against your course."
         />
       </aside>
     </div>

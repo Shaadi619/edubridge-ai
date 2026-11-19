@@ -47,7 +47,7 @@ function shortTitle(title: string) {
   return title.replace(/\.(pdf|pptx?|docx?)$/i, "");
 }
 
-export default function SourceStage({ courseId, items, activeKey, onPick, hoverKey, searching, hasAnswerWithoutSource, emptyMessage, stripCaption }: {
+export default function SourceStage({ courseId, items, activeKey, onPick, hoverKey, searching, hasAnswerWithoutSource, emptyMessage, stripCaption, idleCaption, emptyHint }: {
   courseId: string;
   items: StageCitation[];
   activeKey: string | null;
@@ -57,6 +57,10 @@ export default function SourceStage({ courseId, items, activeKey, onPick, hoverK
   hasAnswerWithoutSource: boolean;
   emptyMessage?: string;
   stripCaption?: string;
+  /** Line under "Course source" before anything is cited. */
+  idleCaption?: string;
+  /** Second line of the empty state. */
+  emptyHint?: string;
 }) {
   const active = items.find(item => item.key === activeKey) ?? null;
   const [excerpt, setExcerpt] = useState<ExcerptStatus>("idle");
@@ -122,7 +126,7 @@ export default function SourceStage({ courseId, items, activeKey, onPick, hoverK
         <div className="flex min-w-0 flex-col">
           <span className="truncate text-[15px] font-semibold">{active ? shortTitle(active.citation.document_title) : "Course source"}</span>
           <span className="text-[13px] text-[var(--eb-text-muted)]">
-            {active ? (location ?? "Course excerpt") : "The page behind each answer appears here"}
+            {active ? (location ?? "Course excerpt") : (idleCaption ?? "The page behind each answer appears here")}
           </span>
         </div>
         {active && excerpt !== "idle" && excerpt !== "loading" && !("error" in excerpt) && (
@@ -162,7 +166,7 @@ export default function SourceStage({ courseId, items, activeKey, onPick, hoverK
                 ? "No passage supported the last answer, so nothing is lit."
                 : "Ask a question and the page your answer comes from will appear here.")}
             </p>
-            <p className="m-0 text-[15px]">The exact lines the answer used are lit, so you can check it against your course.</p>
+            <p className="m-0 text-[15px]">{emptyHint ?? "The exact lines the answer used are lit, so you can check it against your course."}</p>
           </div>
         )}
         {active && excerpt === "loading" && (
