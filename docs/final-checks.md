@@ -41,3 +41,16 @@ Things to verify by hand before the redesign branch is merged. Tick each one off
 - Fixed: "Your courses" showed "0 students" for other courses.
 - Not built yet: there is no way to remove a topic once added.
 - Slow: an AI follow-up draft takes about 30 to 40 seconds; topic suggestions about a minute.
+
+### Student side (signed in as a student in Chrome)
+
+- Works: notifications show the follow-up and the announcement; the pinned announcement shows in Machine Learning.
+- Works: Show Your Work is hidden in Machine Learning, where the teacher left it off.
+- Works: Join Course rejects a wrong code and says "already in" for Advanced AI.
+- Works: Settings changes (difficulty, switch, profile) save and come back after reload.
+- Works: Show Your Work caught both planted mistakes (steps 3 and 6), cited pages 62 and 14, and said the teacher reviews it first.
+- Fixed: the source panel said "This excerpt is unavailable" for Show Your Work citations.
+- Fixed: the source panel scrolled away from long feedback, so a clicked citation lit a line off screen. It now stays in view (Show Your Work and Quiz).
+- Fixed: Settings showed "0 quizzes taken" before the count loaded.
+- Fixed: the join-code box had no proper name for screen readers.
+- Still open: the notifications panel uses the old light style; "Join a Course" appears both in the header and on the page; the page strip can show the same page twice.

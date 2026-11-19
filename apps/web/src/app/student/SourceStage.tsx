@@ -89,7 +89,7 @@ export default function SourceStage({ courseId, items, activeKey, onPick, hoverK
     }
     const controller = new AbortController();
     setExcerpt("loading");
-    void loadCitationExcerpt(courseId, active.key, controller.signal).then(source => {
+    void loadCitationExcerpt(courseId, active.citation.chunk_id ?? active.key, controller.signal).then(source => {
       if (controller.signal.aborted) return;
       setExcerpt(source);
       void loadLink(source);

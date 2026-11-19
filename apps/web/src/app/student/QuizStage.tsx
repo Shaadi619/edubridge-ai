@@ -377,7 +377,7 @@ export default function QuizStage({ userId, courseId, courseName, accessToken, o
         </div>
       </section>
 
-      <aside aria-label="Course source" className="min-h-[420px] border-t border-[#26313D] lg:border-l lg:border-t-0">
+      <aside aria-label="Course source" className="min-h-[420px] border-t border-[#26313D] lg:border-l lg:border-t-0 lg:sticky lg:top-14 lg:h-[calc(100vh-3.5rem)] lg:self-start">
         <SourceStage
           courseId={courseId}
           items={stageItems}

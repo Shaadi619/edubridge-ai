@@ -284,7 +284,7 @@ export default function WorkStage({ courseId, courseName, accessToken }: {
       </section>
 
       <aside aria-label="Course source"
-        className={`min-h-[420px] border-t border-[#26313D] lg:block lg:border-l lg:border-t-0 ${stageItems.length ? "" : "hidden"}`}>
+        className={`min-h-[420px] border-t border-[#26313D] lg:block lg:border-l lg:border-t-0 lg:sticky lg:top-14 lg:h-[calc(100vh-3.5rem)] lg:self-start ${stageItems.length ? "" : "hidden"}`}>
         <SourceStage
           courseId={courseId}
           items={stageItems}

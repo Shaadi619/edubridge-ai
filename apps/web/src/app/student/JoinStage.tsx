@@ -99,7 +99,7 @@ export default function JoinStage({ courses }: { courses: StudentCourse[] }) {
           <label className="flex flex-col gap-2">
             <span className="text-[15px] font-medium">Join code</span>
             <span className="flex gap-2">
-              <input value={code} autoCapitalize="characters" autoComplete="off" spellCheck={false}
+              <input value={code} aria-label="Join code" autoCapitalize="characters" autoComplete="off" spellCheck={false}
                 onChange={event => { setCode(event.target.value.toUpperCase()); setLookup("idle"); setFound(null); }}
                 className="min-h-12 min-w-0 flex-1 rounded-xl border border-[var(--eb-line)] bg-[var(--eb-raised-2)] px-4 text-[18px] font-semibold tracking-[0.08em] focus:border-[var(--eb-text-muted)] focus:outline-none" />
               <button type="submit" disabled={code.trim().length < 3 || lookup === "looking"}

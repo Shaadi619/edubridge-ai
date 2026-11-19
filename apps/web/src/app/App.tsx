@@ -2256,7 +2256,7 @@ function StudentSettings({ courses, darkMode, setDarkMode }: { courses: StudentC
   const { profile: account, user, session, refreshProfile } = useAuth();
   const [editing, setEditing] = useState(false);
   const [saving, setSaving] = useState(false);
-  const [quizCount, setQuizCount] = useState(0);
+  const [quizCount, setQuizCount] = useState<number | null>(null);
   const [details, setDetails] = useState({ name: account?.display_name ?? "", headline: account?.headline ?? "", organization: account?.organization ?? "" });
   const [prefs, setPrefs] = useState<StoredPreferences>({ difficulty: "adaptive", misconceptionAlerts: true, darkMode });
 
@@ -2276,7 +2276,7 @@ function StudentSettings({ courses, darkMode, setDarkMode }: { courses: StudentC
     if (!session) return;
     void Promise.all(courses.map(course => api.courseProgress(course.id, session.access_token)))
       .then(results => setQuizCount(results.reduce((sum, result) => sum + result.quiz_count, 0)))
-      .catch(() => setQuizCount(0));
+      .catch(() => setQuizCount(null));
   }, [courses, session]);
 
   const persistPrefs = async (next: StoredPreferences) => {
@@ -2338,7 +2338,7 @@ function StudentSettings({ courses, darkMode, setDarkMode }: { courses: StudentC
             <span className="text-[15px] text-[var(--eb-text-soft)]">{account?.headline || "Student"}{account?.organization ? `, ${account.organization}` : ""}</span>
             <span className="text-sm text-[var(--eb-text-muted)]">{user?.email}</span>
             <span className="mt-2 text-sm text-[var(--eb-text-muted)]">
-              {courses.length} {courses.length === 1 ? "course" : "courses"}, {quizCount} {quizCount === 1 ? "quiz" : "quizzes"} taken
+              {courses.length} {courses.length === 1 ? "course" : "courses"}{quizCount === null ? "" : `, ${quizCount} ${quizCount === 1 ? "quiz" : "quizzes"} taken`}
               {account?.created_at ? `, with EduBridge since ${new Date(account.created_at).toLocaleDateString(undefined, { month: "long", year: "numeric" })}` : ""}
             </span>
           </div>
