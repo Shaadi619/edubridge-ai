@@ -1,3 +1,4 @@
+import asyncio
 import logging
 from datetime import UTC, datetime, timedelta
 from itertools import combinations
@@ -350,19 +351,13 @@ async def _misconception_course_citations(
         return {}
     chunk_response = await client.get(
         f"{base}/rest/v1/material_chunks", headers=headers,
-        params={"id": f"in.({','.join(row['chunk_id'] for row in citation_rows)})", "select": "id,material_id,page_number"},
+        params={"id": f"in.({','.join(row['chunk_id'] for row in citation_rows)})", "select": "id,material_id,page_number,materials(id,title)"},
     )
     chunk_response.raise_for_status()
     chunks = {row["id"]: row for row in chunk_response.json()}
-    material_ids = list(dict.fromkeys(row["material_id"] for row in chunks.values()))
-    if not material_ids:
+    materials = {row["material_id"]: row["materials"]["title"] for row in chunks.values() if row.get("materials")}
+    if not materials:
         return {}
-    material_response = await client.get(
-        f"{base}/rest/v1/materials", headers=headers,
-        params={"id": f"in.({','.join(material_ids)})", "select": "id,title"},
-    )
-    material_response.raise_for_status()
-    materials = {row["id"]: row["title"] for row in material_response.json()}
     citations_by_answer: dict[str, list[dict]] = {}
     for row in citation_rows:
         chunk = chunks.get(row["chunk_id"])
@@ -623,83 +618,70 @@ async def teacher_course_analytics(
     headers = {"apikey": key, "Authorization": f"Bearer {key}", "Content-Type": "application/json"}
     base = settings.supabase_url.rstrip("/")
     async with httpx.AsyncClient(timeout=30) as client:
-        course_response = await client.get(
-            f"{base}/rest/v1/courses", headers=headers,
-            params={"id": f"eq.{course_id}", "teacher_id": f"eq.{user.id}", "select": "id,name"},
-        )
-        course_response.raise_for_status()
-        if not course_response.json():
+        async def rows(table: str, params: dict, fallback_select: str | None = None) -> list[dict]:
+            response = await client.get(f"{base}/rest/v1/{table}", headers=headers, params=params)
+            if response.status_code == 400 and fallback_select:
+                # An optional column from a later migration isn't there yet.
+                response = await client.get(f"{base}/rest/v1/{table}", headers=headers, params={**params, "select": fallback_select})
+            response.raise_for_status()
+            return response.json()
+
+        course_filter = {"course_id": f"eq.{course_id}"}
+        if not await rows("courses", {"id": f"eq.{course_id}", "teacher_id": f"eq.{user.id}", "select": "id"}):
             raise HTTPException(status_code=403, detail="Only the course teacher can view analytics")
-        enrollments_response = await client.get(
-            f"{base}/rest/v1/enrollments", headers=headers,
-            params={"course_id": f"eq.{course_id}", "status": "eq.approved", "select": "student_id"},
+
+        # Stage 1: everything that only needs the course. These run side by side.
+        (
+            enrollment_rows, material_rows, quizzes, misconceptions, study_plans,
+            graph_topics, graph_link_rows, mastery_rows,
+        ) = await asyncio.gather(
+            rows("enrollments", {**course_filter, "status": "eq.approved", "select": "student_id"}),
+            rows("materials", {**course_filter, "status": "eq.ready", "select": "id"}),
+            rows("quizzes", {**course_filter, "select": "id,student_id"}),
+            rows("misconceptions", {
+                **course_filter, "order": "created_at.desc",
+                "select": "id,student_id,source_message_id,concept,explanation,student_evidence,recommended_intervention,status,created_at,occurrence_count,last_detected_at,retention_status,retention_due_at",
+            }),
+            rows("study_plan_items", {**course_filter, "status": "eq.pending", "select": "id,student_id,concept,action,source,status,due_at"}),
+            rows("course_topics", {**course_filter, "select": "id,name"}),
+            rows("course_topic_prerequisites", {**course_filter, "select": "topic_id,prerequisite_topic_id,reason,confidence,evidence"},
+                 fallback_select="topic_id,prerequisite_topic_id"),
+            rows("student_concept_mastery", {**course_filter, "select": "student_id,concept,mastery_score,total_answers,completed_teach_backs,open_misconceptions"}),
         )
-        enrollments_response.raise_for_status()
-        student_ids = [row["student_id"] for row in enrollments_response.json()]
-        materials_response = await client.get(
-            f"{base}/rest/v1/materials", headers=headers,
-            params={"course_id": f"eq.{course_id}", "status": "eq.ready", "select": "id"},
-        )
-        materials_response.raise_for_status()
+        student_ids = [row["student_id"] for row in enrollment_rows]
         if not student_ids:
-            return {"active_students": 0, "average_score": 0, "open_flags": 0, "overdue_study_tasks": 0, "quizzes_today": 0, "document_count": len(materials_response.json()), "students": [], "attention": [], "intervention_queue": [], "misconception_network": {"nodes": [], "edges": [], "hub_concept": None}, "topic_scores": [], "misconceptions": []}
-        profiles_response = await client.get(
-            f"{base}/rest/v1/profiles", headers=headers,
-            params={"id": f"in.({','.join(student_ids)})", "select": "id,display_name"},
-        )
-        profiles_response.raise_for_status()
-        names = {row["id"]: row["display_name"] for row in profiles_response.json()}
-        quizzes_response = await client.get(
-            f"{base}/rest/v1/quizzes", headers=headers,
-            params={"course_id": f"eq.{course_id}", "select": "id,student_id"},
-        )
-        quizzes_response.raise_for_status()
-        quizzes = quizzes_response.json()
+            return {"active_students": 0, "average_score": 0, "open_flags": 0, "overdue_study_tasks": 0, "quizzes_today": 0, "document_count": len(material_rows), "students": [], "attention": [], "intervention_queue": [], "misconception_network": {"nodes": [], "edges": [], "hub_concept": None}, "topic_scores": [], "misconceptions": []}
         quiz_owner = {row["id"]: row["student_id"] for row in quizzes}
-        attempts = []
-        answers = []
-        concepts: dict[str, str] = {}
-        if quiz_owner:
-            quiz_filter = f"in.({','.join(quiz_owner)})"
-            attempts_response = await client.get(
-                f"{base}/rest/v1/quiz_attempts", headers=headers,
-                params={"quiz_id": quiz_filter, "completed_at": "not.is.null", "select": "id,quiz_id,student_id,score,completed_at"},
+        quiz_filter = f"in.({','.join(quiz_owner)})"
+
+        async def quiz_results() -> tuple[list[dict], dict[str, str], list[dict]]:
+            if not quiz_owner:
+                return [], {}, []
+            attempt_rows, question_rows = await asyncio.gather(
+                rows("quiz_attempts", {"quiz_id": quiz_filter, "completed_at": "not.is.null", "select": "id,quiz_id,student_id,score,completed_at"}),
+                rows("quiz_questions", {"quiz_id": quiz_filter, "select": "id,concept"}),
             )
-            attempts_response.raise_for_status()
-            attempts = attempts_response.json()
-            questions_response = await client.get(
-                f"{base}/rest/v1/quiz_questions", headers=headers,
-                params={"quiz_id": quiz_filter, "select": "id,concept"},
-            )
-            questions_response.raise_for_status()
-            concepts = {row["id"]: row["concept"] for row in questions_response.json()}
-            if attempts:
-                answers_response = await client.get(
-                    f"{base}/rest/v1/quiz_answers", headers=headers,
-                    params={"attempt_id": f"in.({','.join(row['id'] for row in attempts)})", "select": "attempt_id,question_id,is_correct,confidence"},
+            answer_rows: list[dict] = []
+            if attempt_rows:
+                answer_rows = await rows(
+                    "quiz_answers",
+                    {"attempt_id": f"in.({','.join(row['id'] for row in attempt_rows)})", "select": "attempt_id,question_id,is_correct,confidence"},
+                    fallback_select="attempt_id,question_id,is_correct",
                 )
-                if answers_response.status_code == 400:
-                    answers_response = await client.get(
-                        f"{base}/rest/v1/quiz_answers", headers=headers,
-                        params={"attempt_id": f"in.({','.join(row['id'] for row in attempts)})", "select": "attempt_id,question_id,is_correct"},
-                    )
-                answers_response.raise_for_status()
-                answers = [{"confidence": None, **row} for row in answers_response.json()]
-        misconceptions_response = await client.get(
-            f"{base}/rest/v1/misconceptions", headers=headers,
-            params={"course_id": f"eq.{course_id}", "select": "id,student_id,source_message_id,concept,explanation,student_evidence,recommended_intervention,status,created_at,occurrence_count,last_detected_at,retention_status,retention_due_at", "order": "created_at.desc"},
+            return attempt_rows, {row["id"]: row["concept"] for row in question_rows}, [{"confidence": None, **row} for row in answer_rows]
+
+        # Stage 2: names, quiz results and the tutor citations behind each mistake, side by side.
+        profile_rows, (attempts, concepts, answers), citation_map = await asyncio.gather(
+            rows("profiles", {"id": f"in.({','.join(student_ids)})", "select": "id,display_name"}),
+            quiz_results(),
+            _misconception_course_citations(client, base, headers, misconceptions),
         )
-        misconceptions_response.raise_for_status()
-        misconceptions = misconceptions_response.json()
+        names = {row["id"]: row["display_name"] for row in profile_rows}
+        graph_links = [{"evidence": [], **row} for row in graph_link_rows]
         open_misconceptions = [item for item in misconceptions if item["status"] == "open"]
-        study_plan_response = await client.get(
-            f"{base}/rest/v1/study_plan_items", headers=headers,
-            params={"course_id": f"eq.{course_id}", "status": "eq.pending", "select": "id,student_id,concept,action,source,status,due_at"},
-        )
-        study_plan_response.raise_for_status()
         now = datetime.now(UTC)
         overdue_plans = [
-            item for item in study_plan_response.json()
+            item for item in study_plans
             if datetime.fromisoformat(item["due_at"].replace("Z", "+00:00")) <= now
         ]
         overdue_by_student: dict[str, int] = {}
@@ -723,33 +705,8 @@ async def teacher_course_analytics(
             if answer["is_correct"]:
                 result[0] += 1
         confidence_gaps = _confidence_gap_records(answers, attempt_student, concepts, attempt_dates)
-        citation_map = await _misconception_course_citations(client, base, headers, misconceptions)
-        graph_topics_response = await client.get(
-            f"{base}/rest/v1/course_topics", headers=headers,
-            params={"course_id": f"eq.{course_id}", "select": "id,name"},
-        )
-        graph_topics_response.raise_for_status()
-        graph_links_response = await client.get(
-            f"{base}/rest/v1/course_topic_prerequisites", headers=headers,
-            params={"course_id": f"eq.{course_id}", "select": "topic_id,prerequisite_topic_id,reason,confidence,evidence"},
-        )
-        if graph_links_response.status_code == 400:
-            graph_links_response = await client.get(
-                f"{base}/rest/v1/course_topic_prerequisites", headers=headers,
-                params={"course_id": f"eq.{course_id}", "select": "topic_id,prerequisite_topic_id"},
-            )
-        graph_links_response.raise_for_status()
-        graph_links = [{"evidence": [], **row} for row in graph_links_response.json()]
-        mastery_response = await client.get(
-            f"{base}/rest/v1/student_concept_mastery", headers=headers,
-            params={
-                "course_id": f"eq.{course_id}",
-                "select": "student_id,concept,mastery_score,total_answers,completed_teach_backs,open_misconceptions",
-            },
-        )
-        mastery_response.raise_for_status()
         mastery_by_student: dict[str, list[dict]] = {}
-        for row in mastery_response.json():
+        for row in mastery_rows:
             mastery_by_student.setdefault(row["student_id"], []).append(row)
         prerequisite_signals = [{
             "student_id": item["student_id"], "concept": item["concept"],
@@ -761,10 +718,10 @@ async def teacher_course_analytics(
             "detected_at": gap.get("last_detected_at"), "citations": [],
         } for gap in confidence_gaps)
         prerequisite_gaps = _prerequisite_gap_records(
-            prerequisite_signals, mastery_by_student, graph_topics_response.json(), graph_links,
+            prerequisite_signals, mastery_by_student, graph_topics, graph_links,
         )
         interventions = _intervention_queue(
-            misconceptions, study_plan_response.json(), names, now, citation_map, confidence_gaps, prerequisite_gaps,
+            misconceptions, study_plans, names, now, citation_map, confidence_gaps, prerequisite_gaps,
         )
         misconception_topics: dict[str, list[str]] = {student_id: [] for student_id in student_ids}
         for item in open_misconceptions:
@@ -795,7 +752,7 @@ async def teacher_course_analytics(
             "open_flags": len(open_misconceptions),
             "overdue_study_tasks": len(overdue_plans),
             "quizzes_today": sum(datetime.fromisoformat(row["completed_at"].replace("Z", "+00:00")).date() == today for row in attempts),
-            "document_count": len(materials_response.json()),
+            "document_count": len(material_rows),
             "students": students,
             "attention": attention,
             "intervention_queue": interventions,
