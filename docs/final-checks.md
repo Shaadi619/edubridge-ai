@@ -16,3 +16,11 @@ Things to verify by hand before the redesign branch is merged. Tick each one off
 ## Database
 
 - [ ] `20261118200000_show_work_setting.sql` was applied through the Supabase SQL editor on 19 November, so it isn't in Supabase's migration history. It is safe to re-run (`add column if not exists`).
+
+## Teacher Overview
+
+- [ ] "Draft a message with AI" opens the follow-up dialog (uses AI tokens): the draft loads, fields are editable, Escape and Close work, "Send to …" assigns it and the student sees the message.
+- [ ] A student entering the join code appears under "waiting to join"; "Let in" and "Turn down" both work.
+- [ ] A Show Your Work upload with a confident, course-backed misconception appears under "uploads to check"; "Agree, add to their record" and "Not a problem" both work.
+- [ ] Post an announcement (with and without "Keep it at the top") and delete it; students see it.
+- [ ] "Copy" copies the join code.

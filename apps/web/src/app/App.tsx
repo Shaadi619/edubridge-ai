@@ -36,6 +36,8 @@ const WorkStage = lazy(() => import("./student/WorkStage"));
 const MaterialsStage = lazy(() => import("./teacher/MaterialsStage"));
 const AnalyticsStage = lazy(() => import("./teacher/AnalyticsStage"));
 const StudentsStage = lazy(() => import("./teacher/StudentsStage"));
+const CourseDesk = lazy(() => import("./teacher/CourseDesk"));
+const FollowUpDialog = lazy(() => import("./teacher/FollowUpDialog"));
 
 // ─── Types ────────────────────────────────────────────────────────────────
 
@@ -544,114 +546,6 @@ function UploadModal({ onClose, onUploaded, onProcessed, courseId, courseName, u
   );
 }
 
-// ─── Enrollment Panel ─────────────────────────────────────────────────────
-
-function EnrollmentPanel({ requests, setRequests, focusedEnrollmentId, focusKey }: {
-  requests: EnrollRequest[];
-  setRequests: React.Dispatch<React.SetStateAction<EnrollRequest[]>>;
-  focusedEnrollmentId?: string;
-  focusKey: number;
-}) {
-  const { session } = useAuth();
-  const pending = requests.filter(r => r.status === "pending");
-  const resolved = requests.filter(r => r.status !== "pending");
-
-  useEffect(() => {
-    if (!focusedEnrollmentId) return;
-    window.setTimeout(() => document.getElementById(`enrollment-${focusedEnrollmentId}`)?.scrollIntoView({ behavior: "smooth", block: "center" }), 50);
-  }, [focusKey, focusedEnrollmentId]);
-
-  const resolve = async (id: number | string, action: "approved" | "denied") => {
-    const r = requests.find(r => r.id === id);
-    if (!r) return;
-    if (typeof id === "string" && session) {
-      try {
-        await api.reviewEnrollment(id, action, session.access_token);
-      } catch (error) {
-        toast.error(error instanceof Error ? error.message : "Could not review enrollment.");
-        return;
-      }
-    }
-    setRequests(prev => prev.map(r => r.id === id ? { ...r, status: action } : r));
-    if (action === "approved") toast.success(`${r.name} approved for ${r.course}`);
-    else toast(`${r.name}'s request denied`, { icon: "—" });
-  };
-
-  return (
-    <div className="bg-card border border-border rounded-xl overflow-hidden shadow-sm">
-      <div className="px-5 py-4 border-b border-border flex items-center gap-2">
-        <h2 className="font-semibold text-foreground">Enrollment Requests</h2>
-        {pending.length > 0 && (
-          <span className="text-xs font-semibold bg-amber-100 text-amber-700 border border-amber-200 px-2 py-0.5 rounded-full">
-            {pending.length} pending
-          </span>
-        )}
-      </div>
-      <AnimatePresence initial={false}>
-        {pending.length === 0 ? (
-          <div className="px-5 py-10 text-center text-sm text-muted-foreground font-light">
-            No pending requests right now.
-          </div>
-        ) : pending.map(r => (
-          <motion.div key={r.id} layout
-            id={`enrollment-${r.id}`}
-            exit={{ opacity: 0, height: 0 }}
-            transition={{ duration: 0.22 }}
-            className={`flex items-center gap-4 px-5 py-4 border-b border-border last:border-0 hover:bg-muted/20 transition-colors flex-wrap ${String(r.id) === focusedEnrollmentId ? "bg-accent/10 ring-2 ring-inset ring-accent/40" : ""}`}
-          >
-            <div className="w-9 h-9 rounded-full bg-primary/10 text-primary flex items-center justify-center text-xs font-bold shrink-0">
-              {r.initials}
-            </div>
-            <div className="flex-1 min-w-0">
-              <div className="text-sm font-medium text-foreground">{r.name}</div>
-              <div className="text-xs text-muted-foreground font-light">{r.email}</div>
-              <div className="flex items-center gap-2 mt-1">
-                <span className="font-mono text-xs bg-muted border border-border px-2 py-0.5 rounded-md">{r.code}</span>
-                <span className="text-xs text-muted-foreground">→ {r.course}</span>
-              </div>
-            </div>
-            <div className="flex items-center gap-1.5 text-xs text-muted-foreground font-mono shrink-0">
-              <Clock size={11} />{r.requestedAt}
-            </div>
-            <div className="flex items-center gap-2 shrink-0">
-              <motion.button whileHover={{ scale: 1.05 }} whileTap={{ scale: 0.95 }}
-                onClick={() => void resolve(r.id, "approved")}
-                className="flex items-center gap-1.5 text-xs font-medium bg-emerald-50 text-emerald-700 border border-emerald-200 hover:bg-emerald-100 px-3 py-1.5 rounded-lg transition-colors"
-              >
-                <CheckSquare size={13} />Approve
-              </motion.button>
-              <motion.button whileHover={{ scale: 1.05 }} whileTap={{ scale: 0.95 }}
-                onClick={() => void resolve(r.id, "denied")}
-                className="flex items-center gap-1.5 text-xs font-medium bg-muted text-muted-foreground border border-border hover:bg-red-50 hover:text-red-600 hover:border-red-200 px-3 py-1.5 rounded-lg transition-colors"
-              >
-                <XSquare size={13} />Deny
-              </motion.button>
-            </div>
-          </motion.div>
-        ))}
-      </AnimatePresence>
-      {resolved.length > 0 && (
-        <div className="border-t border-border">
-          <div className="px-5 py-2.5 text-xs font-mono text-muted-foreground uppercase tracking-wide bg-muted/30">
-            Recently resolved
-          </div>
-          {resolved.map(r => (
-            <div key={r.id} className="flex items-center gap-4 px-5 py-3 border-b border-border last:border-0 opacity-55">
-              <div className="w-9 h-9 rounded-full bg-muted flex items-center justify-center text-xs font-bold text-muted-foreground shrink-0">{r.initials}</div>
-              <div className="flex-1 min-w-0">
-                <div className="text-sm font-medium text-foreground">{r.name}</div>
-                <div className="text-xs text-muted-foreground font-light">{r.course}</div>
-              </div>
-              <span className={`text-xs font-medium px-2.5 py-0.5 rounded-full border ${r.status === "approved" ? "text-emerald-700 bg-emerald-50 border-emerald-200" : "text-muted-foreground bg-muted border-border"}`}>
-                {r.status === "approved" ? "Approved" : "Denied"}
-              </span>
-            </div>
-          ))}
-        </div>
-      )}
-    </div>
-  );
-}
 
 // ─── Student Enroll Tab ───────────────────────────────────────────────────
 
@@ -2092,7 +1986,6 @@ function TeacherDashboard({ onLogout, darkMode, setDarkMode }: { onLogout: () =>
                 <TeacherOverview
                   requests={requests} setRequests={setRequests}
                   announcements={announcements} setAnnouncements={setAnnouncements}
-                  onGoMaterials={() => setTab("materials")}
                   course={selectedCourse}
                   courses={courses}
                   onNewCourse={() => setCourseCreateOpen(true)}
@@ -2151,10 +2044,9 @@ function TeacherDashboard({ onLogout, darkMode, setDarkMode }: { onLogout: () =>
   );
 }
 
-function TeacherOverview({ requests, setRequests, onGoMaterials, announcements, setAnnouncements, course, courses, onNewCourse, analytics, analyticsLoading, teacherName, accessToken, focusedEnrollmentId, focusKey, onViewStudent }: {
+function TeacherOverview({ requests, setRequests, announcements, setAnnouncements, course, courses, onNewCourse, analytics, analyticsLoading, teacherName, accessToken, focusedEnrollmentId, focusKey, onViewStudent }: {
   requests: EnrollRequest[];
   setRequests: React.Dispatch<React.SetStateAction<EnrollRequest[]>>;
-  onGoMaterials: () => void;
   announcements: Announcement[];
   setAnnouncements: React.Dispatch<React.SetStateAction<Announcement[]>>;
   course: TeacherCourse;
@@ -2168,10 +2060,6 @@ function TeacherOverview({ requests, setRequests, onGoMaterials, announcements, 
   focusKey: number;
   onViewStudent: (studentId: string) => void;
 }) {
-  const [composing, setComposing] = useState(false);
-  const [newTitle, setNewTitle] = useState("");
-  const [newBody, setNewBody] = useState("");
-  const [pinNew, setPinNew] = useState(false);
   const [assigningIntervention, setAssigningIntervention] = useState<string | null>(null);
   const [assignedInterventions, setAssignedInterventions] = useState<string[]>([]);
   const [workReviews, setWorkReviews] = useState<Awaited<ReturnType<typeof api.teacherWorkSubmissions>>>([]);
@@ -2193,7 +2081,7 @@ function TeacherOverview({ requests, setRequests, onGoMaterials, announcements, 
     try {
       await api.assignTargetedPractice(course.id, item.student_id, item.concept, accessToken);
       setAssignedInterventions(current => current.includes(item.id) ? current : [...current, item.id]);
-      toast.success(`Targeted practice assigned to ${item.student}`);
+      toast.success(`Practice sent to ${item.student}`);
     } catch (error) {
       toast.error(error instanceof Error ? error.message : "Could not assign targeted practice.");
     } finally {
@@ -2238,7 +2126,7 @@ function TeacherOverview({ requests, setRequests, onGoMaterials, announcements, 
         },
       );
       setAssignedInterventions(current => current.includes(copilotItem.id) ? current : [...current, copilotItem.id]);
-      toast.success(`Reviewed intervention assigned to ${copilotItem.student}`);
+      toast.success(`Follow-up sent to ${copilotItem.student}`);
       setCopilotItem(null);
       setCopilotDraft(null);
     } catch (error) {
@@ -2253,7 +2141,7 @@ function TeacherOverview({ requests, setRequests, onGoMaterials, announcements, 
     try {
       await api.reviewWorkSubmission(course.id, id, decision, accessToken);
       setWorkReviews(current => current.filter(item => item.id !== id));
-      toast.success(decision === "approved" ? "Misconception confirmed and added to the learner record" : "AI suggestion dismissed");
+      toast.success(decision === "approved" ? "Added to the student’s record" : "Marked as not a problem");
     } catch (error) {
       toast.error(error instanceof Error ? error.message : "Could not review this submission.");
     } finally {
@@ -2261,16 +2149,31 @@ function TeacherOverview({ requests, setRequests, onGoMaterials, announcements, 
     }
   };
 
-  const postAnnouncement = async () => {
-    if (!newTitle.trim() || !newBody.trim()) return;
+  const postAnnouncement = async (title: string, body: string, pinned: boolean) => {
     try {
-      const row = await api.createAnnouncement(course.id, newTitle.trim(), newBody.trim(), pinNew, accessToken);
+      const row = await api.createAnnouncement(course.id, title, body, pinned, accessToken);
       setAnnouncements(prev => [{ id: row.id, title: row.title, body: row.body, course: course.name, createdAt: new Date(row.created_at).toLocaleString(), pinned: row.pinned }, ...prev]);
-      setNewTitle(""); setNewBody(""); setPinNew(false); setComposing(false);
-      toast.success("Announcement posted to " + course.name);
+      toast.success(`Posted to ${course.name}`);
+      return true;
     } catch (error) {
-      toast.error(error instanceof Error ? error.message : "Could not post announcement.");
+      toast.error(error instanceof Error ? error.message : "The announcement couldn’t be posted. Try again.");
+      return false;
     }
+  };
+
+  const resolveRequest = async (id: EnrollRequest["id"], decision: "approved" | "denied") => {
+    const request = requests.find(item => item.id === id);
+    if (!request) return;
+    if (typeof id === "string") {
+      try {
+        await api.reviewEnrollment(id, decision, accessToken);
+      } catch (error) {
+        toast.error(error instanceof Error ? error.message : "That couldn’t be saved. Try again.");
+        return;
+      }
+    }
+    setRequests(previous => previous.map(item => item.id === id ? { ...item, status: decision } : item));
+    toast.success(decision === "approved" ? `${request.name} can now use ${request.course}` : `${request.name}’s request was turned down`);
   };
 
   const deleteAnnouncement = async (id: string) => {
@@ -2298,208 +2201,40 @@ function TeacherOverview({ requests, setRequests, onGoMaterials, announcements, 
           onViewStudent={onViewStudent}
         />
       </Suspense>
-      <div className="grid grid-cols-2 lg:grid-cols-4 gap-4 mb-10">
-        {[
-          { label: "Active Students", val: analyticsLoading ? "…" : String(analytics?.active_students ?? 0), sub: `in ${course.name}`, icon: Users, color: "text-blue-500", bg: "bg-blue-50" },
-          { label: "Avg. Quiz Score", val: analyticsLoading ? "…" : `${analytics?.average_score ?? 0}%`, sub: "completed attempts", icon: TrendingUp, color: "text-emerald-600", bg: "bg-emerald-50" },
-          { label: "Open Flags", val: analyticsLoading ? "…" : String(analytics?.open_flags ?? 0), sub: `${analytics?.overdue_study_tasks ?? 0} overdue study tasks`, icon: AlertCircle, color: "text-amber-600", bg: "bg-amber-50" },
-          { label: "Quizzes Today", val: analyticsLoading ? "…" : String(analytics?.quizzes_today ?? 0), sub: "completed today", icon: Target, color: "text-purple-600", bg: "bg-purple-50" },
-        ].map(s => (
-          <motion.div key={s.label} whileHover={{ y: -2, boxShadow: "0 4px 16px rgba(0,0,0,0.08)" }}
-            className="bg-card border border-border rounded-xl p-5 shadow-sm cursor-default transition-shadow"
-          >
-            <div className="flex items-start justify-between mb-4">
-              <span className="text-xs text-muted-foreground font-mono uppercase tracking-wide">{s.label}</span>
-              <div className={`w-7 h-7 rounded-lg ${s.bg} flex items-center justify-center`}>
-                <s.icon size={14} className={s.color} />
-              </div>
-            </div>
-            <div className="font-display text-3xl text-primary">{s.val}</div>
-            <div className="text-xs text-muted-foreground mt-1.5 font-light">{s.sub}</div>
-          </motion.div>
-        ))}
-      </div>
-      <div className="grid grid-cols-1 lg:grid-cols-2 gap-6 mb-10">
-        <div>
-          <div className="flex items-center justify-between mb-4">
-            <h2 className="font-semibold text-foreground">My Courses</h2>
-            <motion.button whileHover={{ scale: 1.02 }} whileTap={{ scale: 0.97 }}
-              onClick={onNewCourse}
-              className="flex items-center gap-1.5 text-xs font-medium text-accent bg-accent/10 hover:bg-accent/20 px-3 py-1.5 rounded-lg transition-colors"
-            >
-              <Plus size={12} />New Course
-            </motion.button>
-          </div>
-          <div className="space-y-4">
-            {courses.map(c => (
-              <motion.div key={c.name} whileHover={{ y: -2, boxShadow: "0 4px 16px rgba(0,0,0,0.07)" }}
-                className="bg-card border border-border rounded-xl p-5 shadow-sm cursor-pointer transition-shadow"
-              >
-                <div className="flex items-start justify-between mb-3">
-                  <div>
-                    <h3 className="font-semibold text-foreground">{c.name}</h3>
-                    <span className="font-mono text-xs text-muted-foreground">{c.code}</span>
-                  </div>
-                  {requests.filter(request => request.course === c.name && request.status === "pending").length > 0 && (
-                    <button onClick={onGoMaterials}
-                      className="text-xs font-medium bg-amber-100 text-amber-700 border border-amber-200 px-2 py-0.5 rounded-full hover:bg-amber-200 transition-colors"
-                    >
-                      {requests.filter(request => request.course === c.name && request.status === "pending").length} pending
-                    </button>
-                  )}
-                </div>
-                <div className="flex gap-4 text-xs text-muted-foreground mb-5 font-light">
-                  <span className="flex items-center gap-1.5"><Users size={12} />{c.id === course.id ? analytics?.active_students ?? 0 : c.students} students</span>
-                  <span className="flex items-center gap-1.5"><FileText size={12} />{c.id === course.id ? analytics?.document_count ?? 0 : 0} documents</span>
-                </div>
-                <div>
-                  <div className="flex justify-between text-xs mb-2">
-                    <span className="text-muted-foreground font-light">Class avg. mastery</span>
-                    <span className="font-mono font-semibold tabular-nums">{c.id === course.id ? `${analytics?.average_score ?? 0}%` : "—"}</span>
-                  </div>
-                  <div className="h-1.5 bg-muted rounded-full overflow-hidden">
-                    <motion.div className="h-full rounded-full bg-accent"
-                      initial={{ width: 0 }} animate={{ width: c.id === course.id ? `${analytics?.average_score ?? 0}%` : "0%" }}
-                      transition={{ duration: 0.8, ease: "easeOut" }}
-                    />
-                  </div>
-                </div>
-              </motion.div>
-            ))}
-          </div>
-        </div>
-        <div>
-          <div className="mb-4">
-            <h2 className="font-semibold text-foreground">Enrollment Requests</h2>
-          </div>
-          <EnrollmentPanel requests={requests} setRequests={setRequests} focusedEnrollmentId={focusedEnrollmentId} focusKey={focusKey} />
-        </div>
-      </div>
-      {workReviews.length > 0 && <div className="mb-10">
-        <div className="flex items-end justify-between gap-4 mb-4"><div><h2 className="font-semibold text-foreground">Submitted Work Review</h2><p className="text-xs text-muted-foreground mt-1">Confirm or dismiss AI-detected misconceptions before they affect mastery.</p></div><span className="text-xs font-mono text-muted-foreground">{workReviews.length} pending</span></div>
-        <div className="space-y-3">{workReviews.map(submission => {
-          const analysis = submission.analysis;
-          const misconception = analysis?.misconception;
-          return <div key={submission.id} className="rounded-xl border border-violet-200 bg-card p-5 shadow-sm">
-            <div className="flex items-start gap-4"><div className="w-9 h-9 rounded-xl bg-violet-50 text-violet-700 flex items-center justify-center shrink-0"><Pencil size={16} /></div><div className="flex-1 min-w-0"><div className="flex items-center gap-2 flex-wrap"><span className="text-sm font-semibold text-foreground">{submission.student}</span><span className="text-xs text-muted-foreground">{submission.filename}</span>{misconception?.confidence != null && <span className="text-[10px] rounded-full bg-violet-50 text-violet-700 px-2 py-0.5">{Math.round(misconception.confidence * 100)}% confidence</span>}</div><p className="text-xs text-muted-foreground mt-1">{submission.context}</p>{misconception && <div className="mt-3"><div className="text-xs font-semibold text-violet-800">Possible misconception: {misconception.concept || misconception.label}</div><p className="text-xs text-foreground mt-1">{misconception.explanation}</p>{misconception.evidence_from_student && <div className="mt-2 rounded-lg bg-muted/50 px-3 py-2 text-xs text-muted-foreground"><span className="font-semibold text-foreground">Observed evidence:</span> “{misconception.evidence_from_student}”</div>}</div>}{analysis?.citations.length ? <div className="flex flex-wrap gap-2 mt-3">{analysis.citations.map((citation, index) => <span key={`${citation.document_title}-${citation.page_number}-${index}`} className="inline-flex items-center gap-1 text-[10px] text-primary border border-primary/15 rounded-lg px-2 py-1"><BookMarked size={10} />{citation.document_title}{citation.page_number ? ` · ${citation.source_kind === "slide" ? "Slide" : "Page"} ${citation.page_number}` : ""}</span>)}</div> : null}</div><div className="shrink-0 flex gap-2"><button onClick={() => void reviewSubmittedWork(submission.id, "dismissed")} disabled={reviewingWorkId === submission.id} className="rounded-lg border border-border px-3 py-2 text-xs font-semibold text-foreground disabled:opacity-40">Dismiss</button><button onClick={() => void reviewSubmittedWork(submission.id, "approved")} disabled={reviewingWorkId === submission.id} className="rounded-lg bg-primary text-primary-foreground px-3 py-2 text-xs font-semibold disabled:opacity-40">{reviewingWorkId === submission.id ? "Saving…" : "Confirm"}</button></div></div>
-          </div>;
-        })}</div>
-      </div>}
-
-      {/* Announcements */}
-      <div>
-        <div className="flex items-center justify-between mb-4">
-          <h2 className="font-semibold text-foreground">Announcements</h2>
-          <motion.button whileHover={{ scale: 1.02 }} whileTap={{ scale: 0.97 }}
-            onClick={() => setComposing(v => !v)}
-            className="flex items-center gap-1.5 text-xs font-medium bg-primary text-primary-foreground px-3 py-1.5 rounded-lg shadow-sm"
-          >
-            <Plus size={12} />{composing ? "Cancel" : "Post Announcement"}
-          </motion.button>
-        </div>
-
-        <AnimatePresence initial={false}>
-          {composing && (
-            <motion.div initial={{ height: 0, opacity: 0 }} animate={{ height: "auto", opacity: 1 }} exit={{ height: 0, opacity: 0 }} transition={{ duration: 0.2 }}
-              className="overflow-hidden mb-4"
-            >
-              <div className="bg-card border border-primary/20 rounded-xl p-5 shadow-sm space-y-3">
-                <input value={newTitle} onChange={e => setNewTitle(e.target.value)}
-                  placeholder="Announcement title..."
-                  className="w-full border border-border rounded-xl px-4 py-2.5 text-sm bg-background focus:outline-none focus:ring-2 focus:ring-ring font-medium" />
-                <textarea value={newBody} onChange={e => setNewBody(e.target.value)}
-                  rows={3} placeholder="Write your message to students in this course..."
-                  className="w-full border border-border rounded-xl px-4 py-2.5 text-sm bg-background focus:outline-none focus:ring-2 focus:ring-ring resize-none font-light" />
-                <div className="flex items-center justify-between">
-                  <label className="flex items-center gap-2 text-sm text-muted-foreground cursor-pointer">
-                    <input type="checkbox" checked={pinNew} onChange={e => setPinNew(e.target.checked)} className="rounded" />
-                    Pin to top of student feed
-                  </label>
-                  <motion.button whileHover={{ scale: 1.01 }} whileTap={{ scale: 0.97 }}
-                    onClick={postAnnouncement} disabled={!newTitle.trim() || !newBody.trim()}
-                    className="bg-primary text-primary-foreground px-4 py-2 rounded-xl text-sm font-semibold shadow-sm disabled:opacity-40 flex items-center gap-2">
-                    <Send size={13} />Post to {course.name}
-                  </motion.button>
-                </div>
-              </div>
-            </motion.div>
-          )}
-        </AnimatePresence>
-
-        {announcements.length === 0 ? (
-          <div className="text-center py-10 text-sm text-muted-foreground font-light border border-dashed border-border rounded-xl">
-            No announcements yet. Post one to notify your students.
-          </div>
-        ) : (
-          <div className="space-y-3">
-            <AnimatePresence initial={false}>
-              {announcements.map(a => (
-                <motion.div key={a.id} layout exit={{ opacity: 0, height: 0 }}
-                  className={`bg-card border rounded-xl p-5 shadow-sm ${a.pinned ? "border-accent/40 bg-accent/5" : "border-border"}`}>
-                  <div className="flex items-start justify-between gap-3">
-                    <div className="flex-1 min-w-0">
-                      <div className="flex items-center gap-2 mb-1">
-                        {a.pinned && <span className="text-[10px] font-bold text-accent uppercase tracking-widest font-mono">Pinned</span>}
-                        <h3 className="font-semibold text-foreground text-sm">{a.title}</h3>
-                      </div>
-                      <p className="text-xs text-muted-foreground font-light leading-relaxed">{a.body}</p>
-                      <div className="flex gap-3 mt-2 text-[10px] font-mono text-muted-foreground/60">
-                        <span>{a.course}</span><span>·</span><span>{a.createdAt}</span>
-                      </div>
-                    </div>
-                    <button onClick={() => void deleteAnnouncement(a.id)}
-                      className="text-muted-foreground hover:text-foreground p-1 rounded-lg hover:bg-muted transition-colors shrink-0">
-                      <X size={13} />
-                    </button>
-                  </div>
-                </motion.div>
-              ))}
-            </AnimatePresence>
-          </div>
-        )}
-      </div>
-
-      <AnimatePresence>
-        {copilotItem && (
-          <motion.div
-            initial={{ opacity: 0 }} animate={{ opacity: 1 }} exit={{ opacity: 0 }}
-            className="fixed inset-0 z-[80] bg-slate-950/55 backdrop-blur-sm flex items-center justify-center p-4"
-            onMouseDown={event => { if (event.target === event.currentTarget && !copilotLoading) setCopilotItem(null); }}
-          >
-            <motion.div initial={{ y: 18, scale: 0.98 }} animate={{ y: 0, scale: 1 }} exit={{ y: 18, scale: 0.98 }} className="w-full max-w-3xl max-h-[90vh] overflow-y-auto rounded-2xl bg-card border border-border shadow-2xl">
-              <div className="sticky top-0 z-10 flex items-start gap-4 border-b border-border bg-card/95 backdrop-blur px-6 py-5">
-                <div className="w-10 h-10 rounded-xl bg-violet-100 text-violet-700 flex items-center justify-center shrink-0"><Sparkles size={18} /></div>
-                <div className="flex-1"><h2 className="font-semibold text-foreground">Teacher Intervention Copilot</h2><p className="text-xs text-muted-foreground mt-1">{copilotItem.student} · {copilotItem.concept}</p></div>
-                <button onClick={() => { if (!copilotLoading) setCopilotItem(null); }} className="p-2 rounded-lg text-muted-foreground hover:bg-muted disabled:opacity-40" disabled={copilotLoading}><X size={16} /></button>
-              </div>
-
-              {copilotLoading ? (
-                <div className="py-20 text-center"><RefreshCw size={24} className="mx-auto text-violet-600 animate-spin" /><h3 className="mt-4 text-sm font-semibold text-foreground">Drafting from course evidence…</h3><p className="mt-2 text-xs text-muted-foreground">This explicit generation uses AI tokens once.</p></div>
-              ) : copilotDraft ? (
-                <div className="p-6 space-y-5">
-                  <div className="rounded-xl border border-amber-200 bg-amber-50 p-4"><div className="text-xs font-semibold text-amber-900">Why this was suggested</div><p className="text-xs text-amber-800 mt-1 leading-relaxed">{copilotDraft.rationale}</p></div>
-
-                  <label className="block"><span className="text-xs font-semibold text-foreground">Editable teacher action</span><textarea rows={3} value={copilotDraft.recommended_action} onChange={event => setCopilotDraft({ ...copilotDraft, recommended_action: event.target.value })} className="mt-2 w-full rounded-xl border border-border bg-background px-4 py-3 text-sm text-foreground focus:outline-none focus:ring-2 focus:ring-violet-300 resize-y" /></label>
-                  <label className="block"><span className="text-xs font-semibold text-foreground">Message the student will receive</span><textarea rows={3} value={copilotDraft.student_message} onChange={event => setCopilotDraft({ ...copilotDraft, student_message: event.target.value })} className="mt-2 w-full rounded-xl border border-border bg-background px-4 py-3 text-sm text-foreground focus:outline-none focus:ring-2 focus:ring-violet-300 resize-y" /></label>
-
-                  <div className="grid md:grid-cols-2 gap-4">
-                    <div className="rounded-xl border border-border p-4"><h3 className="text-xs font-semibold text-foreground">Suggested talking points</h3><ul className="mt-2 space-y-2">{copilotDraft.talking_points.map((point, index) => <li key={index} className="flex gap-2 text-xs text-muted-foreground leading-relaxed"><span className="text-violet-600 font-semibold">{index + 1}.</span>{point}</li>)}</ul></div>
-                    <div className="rounded-xl border border-border p-4"><h3 className="text-xs font-semibold text-foreground">Observable success check</h3><p className="mt-2 text-xs text-muted-foreground leading-relaxed">{copilotDraft.success_check}</p></div>
-                  </div>
-
-                  <div><div className="text-xs font-semibold text-foreground mb-2">Grounded in course material</div><div className="flex flex-wrap gap-2">{copilotDraft.citations.map((citation, index) => <span key={`${citation.document_title}-${citation.page_number}-${index}`} className="inline-flex items-center gap-1.5 text-[11px] text-primary border border-primary/15 rounded-lg px-2.5 py-1"><BookMarked size={11} />{citation.document_title}{citation.page_number ? ` · ${citation.source_kind === "slide" ? "Slide" : "Page"} ${citation.page_number}` : ""}</span>)}</div></div>
-
-                  <div className="flex flex-wrap items-end justify-between gap-4 border-t border-border pt-5">
-                    <label><span className="block text-xs font-semibold text-foreground mb-2">Due in</span><select value={copilotDueDays} onChange={event => setCopilotDueDays(Number(event.target.value))} className="rounded-xl border border-border bg-background px-3 py-2 text-sm text-foreground"><option value={1}>1 day</option><option value={3}>3 days</option><option value={7}>7 days</option><option value={14}>14 days</option></select></label>
-                    <div className="flex gap-2"><button onClick={() => setCopilotItem(null)} className="rounded-xl border border-border px-4 py-2.5 text-sm font-semibold text-foreground">Cancel</button><button onClick={() => void assignCopilotDraft()} disabled={!copilotDraft.recommended_action.trim() || !copilotDraft.student_message.trim() || assigningIntervention === copilotItem.id} className="rounded-xl bg-primary text-primary-foreground px-4 py-2.5 text-sm font-semibold flex items-center gap-2 disabled:opacity-40">{assigningIntervention === copilotItem.id ? <RefreshCw size={14} className="animate-spin" /> : <CheckCircle size={14} />}Review complete — assign</button></div>
-                  </div>
-                  <p className="text-[10px] text-center text-muted-foreground">AI recommends; the teacher edits and decides. Nothing is sent until you assign it.</p>
-                </div>
-              ) : null}
-            </motion.div>
-          </motion.div>
-        )}
-      </AnimatePresence>
+      <Suspense fallback={<div role="status" className="eb-stage mb-10 rounded-2xl px-8 py-8 text-sm text-[#A9B6C2]">Loading the course…</div>}>
+        <CourseDesk
+          course={course}
+          courses={courses}
+          analytics={analytics}
+          analyticsLoading={analyticsLoading}
+          requests={requests}
+          onResolveRequest={resolveRequest}
+          workReviews={workReviews}
+          reviewingWorkId={reviewingWorkId}
+          onReviewWork={(id, decision) => void reviewSubmittedWork(id, decision)}
+          announcements={announcements}
+          onPostAnnouncement={postAnnouncement}
+          onDeleteAnnouncement={deleteAnnouncement}
+          onNewCourse={onNewCourse}
+          focusedEnrollmentId={focusedEnrollmentId}
+          focusKey={focusKey}
+        />
+      </Suspense>
+      {copilotItem && (
+        <Suspense fallback={null}>
+          <FollowUpDialog
+            item={copilotItem}
+            draft={copilotDraft}
+            loading={copilotLoading}
+            dueDays={copilotDueDays}
+            assigning={assigningIntervention === copilotItem.id}
+            onDueDays={setCopilotDueDays}
+            onChange={setCopilotDraft}
+            onClose={() => { if (!copilotLoading) { setCopilotItem(null); setCopilotDraft(null); } }}
+            onAssign={() => void assignCopilotDraft()}
+          />
+        </Suspense>
+      )}
     </div>
   );
 }
