@@ -30,7 +30,8 @@ ALLOWED_AUDIO_TYPES = {
 class AudioTranscriptionRequest(BaseModel):
     filename: str = Field(min_length=1, max_length=180)
     mime_type: str = Field(min_length=3, max_length=100)
-    data_base64: str
+    # Base64 is 4/3 the size of the file; reject oversized bodies before decoding them.
+    data_base64: str = Field(min_length=4, max_length=(MAX_AUDIO_BYTES + 2) // 3 * 4)
 
 
 class AudioTranscriptionResponse(BaseModel):

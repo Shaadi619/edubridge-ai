@@ -32,6 +32,20 @@ def _headers(settings: Settings) -> dict[str, str]:
     return {"apikey": key, "Authorization": f"Bearer {key}", "Content-Type": "application/json"}
 
 
+def storage_path_in_course(storage_path: str, course_id: str) -> bool:
+    """Teachers write the material row themselves, so its file path is untrusted.
+
+    The app stores files as `<course>/<teacher>/<file>`; refuse anything that
+    points outside the material's own course folder.
+    """
+    parts = storage_path.split("/")
+    return (
+        len(parts) >= 2
+        and parts[0] == str(course_id)
+        and all(part not in {"", ".", ".."} and "\\" not in part for part in parts)
+    )
+
+
 def _extract_pages(content: bytes, mime_type: str, storage_path: str) -> list[str]:
     if len(content) > MAX_FILE_BYTES:
         raise ValueError("The document exceeds the 50 MB processing limit")
@@ -117,6 +131,8 @@ async def process_material(
         if not rows:
             raise HTTPException(status_code=404, detail="Material not found")
         material = rows[0]
+        if not storage_path_in_course(material["storage_path"], material["course_id"]):
+            raise HTTPException(status_code=400, detail="This material's file is not stored under its course")
         if material["status"] == "processing":
             raise HTTPException(status_code=409, detail="This material is already processing")
         if material["status"] == "ready":
