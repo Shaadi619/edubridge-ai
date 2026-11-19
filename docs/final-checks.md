@@ -54,3 +54,14 @@ Things to verify by hand before the redesign branch is merged. Tick each one off
 - Fixed: Settings showed "0 quizzes taken" before the count loaded.
 - Fixed: the join-code box had no proper name for screen readers.
 - Still open: the notifications panel uses the old light style; "Join a Course" appears both in the header and on the page; the page strip can show the same page twice.
+
+### Teacher side, second pass
+
+- Works: deleting the test announcement removes it from the course.
+- Works: "Agree, add to their record" on a Show Your Work upload clears it from "uploads to check" and adds the mistake to the student's record.
+- Works: the Show Your Work switch saves and survives a reload (Machine Learning turned on, checked, turned back off).
+- Fixed: once after switching accounts the app showed a blank page. If the account details fail to load, it now says so and offers "Try again" and "Sign out".
+- Fixed: Analytics and the course summary didn't count an agreed upload until the page was reloaded.
+- Fixed: the upload quote showed doubled quotation marks.
+- Fixed: mistake titles like "sequential processing misconception" now read "Sequential processing".
+- Still open: an agreed upload adds a new mistake even when the student already has an open one on the same idea (here "Sequential vs. parallel processing").

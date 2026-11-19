@@ -163,7 +163,7 @@ export default function CourseDesk({
                       )}
                       {misconception?.explanation && <p className="m-0 text-[15px] leading-relaxed text-[var(--eb-text-soft)]">{misconception.explanation}</p>}
                       {misconception?.evidence_from_student && (
-                        <p className="m-0 border-l-2 border-[var(--eb-student-line)] pl-3 text-[15px] leading-relaxed text-[var(--eb-student-text)]">“{misconception.evidence_from_student}”</p>
+                        <p className="m-0 border-l-2 border-[var(--eb-student-line)] pl-3 text-[15px] leading-relaxed text-[var(--eb-student-text)]">“{misconception.evidence_from_student.trim().replace(/^["'“‘]+|["'”’]+$/g, "")}”</p>
                       )}
                       {sources.length > 0 && (
                         <span className="text-sm text-[var(--eb-text-muted)]">

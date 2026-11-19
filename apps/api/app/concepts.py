@@ -17,7 +17,11 @@ def friendly_concept(value: str) -> str:
     if "_" in value or ("-" in value and " " not in value):
         words = [_ACRONYMS.get(word.lower(), word.capitalize()) for word in words]
         return " ".join(words)
-    return re.sub(r"\brnns?\b", "RNNs", cleaned, flags=re.IGNORECASE)
+    titled = re.sub(r"\brnns?\b", "RNNs", cleaned, flags=re.IGNORECASE)
+    # "sequential processing misconception" is a mistake about sequential processing.
+    trimmed = re.sub(r"\s+(misconceptions?|misunderstandings?|errors?)$", "", titled, flags=re.IGNORECASE).strip()
+    titled = trimmed or titled
+    return titled[:1].upper() + titled[1:]
 
 
 def concept_terms(*values: str | None) -> set[str]:

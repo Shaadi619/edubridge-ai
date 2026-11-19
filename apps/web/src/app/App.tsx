@@ -959,6 +959,7 @@ function TeacherDashboard({ onLogout, darkMode, setDarkMode }: { onLogout: () =>
                 </div>
               ) : tab === "overview" && selectedCourse ? (
                 <TeacherOverview
+                  onAnalyticsChanged={() => void refreshAnalytics(true)}
                   requests={requests} setRequests={setRequests}
                   announcements={announcements} setAnnouncements={setAnnouncements}
                   course={selectedCourse}
@@ -1019,7 +1020,7 @@ function TeacherDashboard({ onLogout, darkMode, setDarkMode }: { onLogout: () =>
   );
 }
 
-function TeacherOverview({ requests, setRequests, announcements, setAnnouncements, course, courses, onNewCourse, analytics, analyticsLoading, teacherName, accessToken, focusedEnrollmentId, focusKey, onViewStudent }: {
+function TeacherOverview({ requests, setRequests, announcements, setAnnouncements, course, courses, onNewCourse, analytics, analyticsLoading, teacherName, accessToken, focusedEnrollmentId, focusKey, onViewStudent, onAnalyticsChanged }: {
   requests: EnrollRequest[];
   setRequests: React.Dispatch<React.SetStateAction<EnrollRequest[]>>;
   announcements: Announcement[];
@@ -1034,6 +1035,7 @@ function TeacherOverview({ requests, setRequests, announcements, setAnnouncement
   focusedEnrollmentId?: string;
   focusKey: number;
   onViewStudent: (studentId: string) => void;
+  onAnalyticsChanged: () => void;
 }) {
   const [assigningIntervention, setAssigningIntervention] = useState<string | null>(null);
   const [assignedInterventions, setAssignedInterventions] = useState<string[]>([]);
@@ -1120,6 +1122,7 @@ function TeacherOverview({ requests, setRequests, announcements, setAnnouncement
     try {
       await api.reviewWorkSubmission(course.id, id, decision, accessToken);
       setWorkReviews(current => current.filter(item => item.id !== id));
+      if (decision === "approved") onAnalyticsChanged();
       toast.success(decision === "approved" ? "Added to the student’s record" : "Marked as not a problem");
     } catch (error) {
       toast.error(error instanceof Error ? error.message : "Could not review this submission.");
@@ -2403,6 +2406,40 @@ function AuthLoading() {
   );
 }
 
+function ProfileUnavailable({ onLogout }: { onLogout: () => void }) {
+  const { refreshProfile } = useAuth();
+  const [retrying, setRetrying] = useState(false);
+  const retry = async () => {
+    setRetrying(true);
+    try {
+      await refreshProfile();
+    } catch {
+      toast.error("Your account still couldn't be loaded. Check your connection and try again.");
+    } finally {
+      setRetrying(false);
+    }
+  };
+  return (
+    <div className="eb-stage flex min-h-screen flex-col items-center justify-center gap-6 px-6 text-center">
+      <Wordmark width={170} />
+      <div className="flex max-w-[44ch] flex-col gap-2">
+        <h1 className="m-0 text-[24px] font-semibold leading-tight">Your account didn't load</h1>
+        <p className="m-0 text-[15px] leading-relaxed text-[var(--eb-text-soft)]">You're signed in, but EduBridge couldn't fetch your account details. This is usually a dropped connection.</p>
+      </div>
+      <div className="flex flex-wrap items-center justify-center gap-3">
+        <button type="button" onClick={() => void retry()} disabled={retrying}
+          className="inline-flex min-h-11 items-center rounded-xl bg-[var(--eb-text)] px-5 font-semibold text-[var(--eb-ink)] disabled:opacity-50">
+          {retrying ? "Trying again…" : "Try again"}
+        </button>
+        <button type="button" onClick={onLogout}
+          className="inline-flex min-h-11 items-center rounded-xl border border-[var(--eb-line)] px-5 font-semibold text-[var(--eb-text)]">
+          Sign out
+        </button>
+      </div>
+    </div>
+  );
+}
+
 function TeacherApprovalPending({ onLogout }: { onLogout: () => void }) {
   const { profile } = useAuth();
   const first = (profile?.display_name ?? "").split(" ")[0];
@@ -2560,6 +2597,15 @@ export default function App() {
   };
 
   if (loading) return <AuthLoading />;
+
+  if (session && !profile) {
+    return (
+      <div className={darkMode ? "dark" : ""}>
+        <Toaster position="bottom-right" />
+        <ProfileUnavailable onLogout={() => void logout()} />
+      </div>
+    );
+  }
 
   if (session && profile?.role === "teacher" && !profile.teacher_approved_at) {
     return (
